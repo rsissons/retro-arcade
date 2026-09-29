@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sky Lancers</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 320, H = 240;
+  const GRAV = 190, FLAP = 88, MAXUP = 150, MAXFALL = 170;
+  const LAVA_Y = 222;
+  const TYPES = {
+    bounder: { col: '#e33', pts: 500, speed: 48, flapRate: 0.55, seek: 0.15 },
+    hunter: { col: '#bbb', pts: 750, speed: 66, flapRate: 0.75, seek: 0.5 },
+    lord: { col: '#48f', pts: 1500, speed: 88, flapRate: 0.95, seek: 0.85 },
+  };
+  const NEXT = { bounder: 'hunter', hunter: 'lord', lord: 'lord' };
+  const EGG_PTS = [250, 500, 750, 1000];
+  let G, A;
+
+  function platforms() {
+    const lateGround = G.wave >= 3;
+    return [
+      { x: 0, y: 58, w: 46 }, { x: 274, y: 58, w: 46 },
+      { x: 104, y: 68, w: 96 },
+      { x: 0, y: 124, w: 72 }, { x: 186, y: 112, w: 64 }, { x: 266, y: 124, w: 54 },
+      { x: 108, y: 150, w: lateGround ? 44 : 64 },
+      { x: 26, y: 178, w: 58 }, { x: 234, y: 178, w: 58 },
+      { x: lateGround ? 78 : 44, y: 212, w: lateGround ? 164 : 232, ground: true },
+    ];
+  }
+  const PADS = [[160, 212], [150, 68], [30, 124], [290, 124]];
+
+  function mkRider(kind, x, y) {
+    return { kind, x, y, vx: 0, vy: 0, face: 1, ground: null, anim: 0, flapT: 0, spawn: 1.2, grab: 0, escape: 0, think: 0, ty: y, dead: false };
+  }
+
+  function startWave() {
+    G.wave++;
+    G.plats = platforms();
+    G.waveT = 0;
+    G.ptero = null;
+    G.died = false;
+    G.eggWave = G.wave % 5 === 0;
+    G.survival = G.wave % 5 === 2;
+    G.banner = 2.5;
+    G.bannerText = G.eggWave ? 'EGG WAVE' : G.survival ? 'SURVIVAL WAVE' : 'PREPARE TO JOUST';
+    G.toSpawn = [];
+    if (G.eggWave) {
+      for (const p of G.plats) {
+        if (p.ground) continue;
+        const n = p.w > 60 ? 2 : 1;
+        for (let i = 0; i < n; i++) G.eggs.push({ x: p.x + (i + 1) * p.w / (n + 1), y: p.y - 4, vx: 0, vy: 0, rest: true, t: 8 + Math.random() * 4, kind: 'bounder' });
+      }
+    } else {
+      const n = Math.min(3 + G.wave, 9);
+      for (let i = 0; i < n; i++) {
+        const r = Math.random(), w = G.wave;
+        const kind = w < 3 ? (r < 0.8 ? 'bounder' : 'hunter') : w < 7 ? (r < 0.4 ? 'bounder' : r < 0.9 ? 'hunter' : 'lord') : (r < 0.2 ? 'bounder' : r < 0.65 ? 'hunter' : 'lord');
+        G.toSpawn.push({ kind, at: 1.5 + i * 0.9 });
+      }
+    }
+  }
+
+  function resetPlayer() {
+    const [x, y] = PADS[0];
+    G.p = mkRider('player', x, y - 1);
+    G.p.spawn = 1.2; G.p.inv = 2.5;
+  }
+
+  function land(e, dtPrevY, dt) {
+    const h = 20;
+    e.ground = null;
+    for (const p of G.plats) {
+      const inX = xOver(e.x, p);
+      if (!inX) continue;
+      // landing on top
+      if (e.vy >= 0 && dtPrevY <= p.y + 0.5 && e.y >= p.y) { e.y = p.y; e.vy = 0; e.ground = p; }
+      // bonk head underneath
+      else if (e.vy < 0 && dtPrevY - h >= p.y + 5 && e.y - h < p.y + 5) { e.y = p.y + 5 + h; e.vy = 30; }
+    }
+    // side bounce against ledge ends at body height
+    for (const p of G.plats) {
+      if (e.y - 6 < p.y || e.y - 20 > p.y + 5) continue;
+      if (e.ground === p) continue;
+      const left = p.x, right = p.x + p.w;
+      if (e.vx > 0 && e.x + 7 > left && e.x + 7 - e.vx * dt <= left + 1 && e.x < left) { e.x = left - 7; e.vx = -Math.abs(e.vx) * 0.6; }
+      else if (e.vx < 0 && e.x - 7 < right && e.x - 7 - e.vx * dt >= right - 1 && e.x > right) { e.x = right + 7; e.vx = Math.abs(e.vx) * 0.6; }
+    }
+  }
+  const xOver = (x, p) => { const xs = [x, x - W, x + W]; return xs.some(v => v > p.x - 3 && v < p.x + p.w + 3); };
+
+  function physics(e, dt, flap, dir, maxSpeed) {
+    if (flap) {
+      e.vy = Math.max(-MAXUP, e.vy - FLAP);
+      e.flapT = 0.15; e.ground = null;
+      if (dir) e.vx += dir * 22;
+      if (e === G.p) A.sfx.noise({ d: 0.08, v: 0.12, f: 900, f2: 300 });
+    }
+    if (e.ground) {
+      if (dir) { e.vx += dir * 160 * dt; e.face = dir; }
+      else { e.vx *= Math.pow(0.08, dt); if (Math.abs(e.vx) < 4) e.vx = 0; }
+      if (e.vx && Math.sign(e.vx) !== e.face && !dir) { /* skidding */ }
+      e.anim += Math.abs(e.vx) * dt * 0.25;
+    } else {
+      if (dir) { e.vx += dir * 60 * dt; e.face = dir; }
+      e.vy = Math.min(MAXFALL, e.vy + GRAV * dt);
+    }
+    e.vx = Math.max(-maxSpeed, Math.min(maxSpeed, e.vx));
+    if (e.flapT > 0) e.flapT -= dt;
+    const py = e.y;
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    if (e.x < 0) e.x += W; else if (e.x >= W) e.x -= W;
+    if (e.y < 22) { e.y = 22; e.vy = Math.max(0, e.vy); }
+    land(e, py, dt);
+  }
+
+  function killPlayer(how) {
+    const p = G.p;
+    p.dead = true; G.died = true;
+    G.lives--;
+    G.respawn = 2.2;
+    burst(p.x, p.y - 10, ['#fd0', '#fff', '#f80'], 24);
+    A.sfx.noise({ d: 0.8, v: 0.4, f: 1600, f2: 80 });
+    if (how === 'lava') A.sfx.tone({ f: 300, f2: 60, d: 0.8, type: 'sawtooth', v: 0.08 });
+  }
+  function killEnemy(e, i) {
+    G.enemies.splice(i, 1);
+    A.addScore(TYPES[e.kind].pts);
+    G.pops.push({ x: e.x, y: e.y - 24, s: String(TYPES[e.kind].pts), t: 1 });
+    burst(e.x, e.y - 10, [TYPES[e.kind].col, '#fff'], 16);
+    G.eggs.push({ x: e.x, y: e.y - 10, vx: e.vx * 0.6, vy: -40, rest: false, t: 7 + Math.random() * 4, kind: NEXT[e.kind] });
+    A.sfx.tune([[660, .05], [990, .08]], { v: .1 });
+  }
+  function burst(x, y, cols, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.28, s = 20 + Math.random() * 80;
+      G.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 30, life: 0.6 + Math.random() * 0.4, c: A.pick(cols) });
+    }
+  }
+
+  function joust(p, e, i) {
+    // horizontal distance respecting wrap
+    let dx = e.x - p.x; if (dx > W / 2) dx -= W; if (dx < -W / 2) dx += W;
+    if (Math.abs(dx) > 14 || Math.abs(e.y - p.y) > 16) return false;
+    const diff = e.y - p.y;   // positive: enemy is lower, player lance higher
+    if (diff > 3) { killEnemy(e, i); p.vy = Math.min(p.vy, -30); return true; }
+    if (diff < -3) { if (p.inv <= 0) killPlayer(); return true; }
+    // tie: bounce apart
+    const s = Math.sign(dx) || 1;
+    p.vx = -s * 60; e.vx = s * 60;
+    p.x -= s * 3; e.x += s * 3;
+    A.sfx.tone({ f: 1400, f2: 900, d: 0.08, type: 'square', v: 0.07 });
+    return false;
+  }
+
+  function enemyAI(e, dt) {
+    const t = TYPES[e.kind], p = G.p;
+    e.think -= dt;
+    if (e.think <= 0) {
+      e.think = 0.5 + Math.random() * 1.2;
+      if (!p.dead && Math.random() < t.seek) {
+        e.ty = Math.max(30, p.y - 12 - Math.random() * 20);
+        let dx = p.x - e.x; if (dx > W / 2) dx -= W; if (dx < -W / 2) dx += W;
+        e.dir = Math.sign(dx) || 1;
+      } else {
+        e.ty = 40 + Math.random() * 150;
+        if (Math.random() < 0.3) e.dir = -(e.dir || 1);
+      }
+      if (!e.dir) e.dir = Math.random() < 0.5 ? -1 : 1;
+    }
+    let flap = false;
+    const want = e.ty + (e.y > 190 ? -60 : 0);
+    if (e.y > want && Math.random() < t.flapRate * dt * 7) flap = true;
+    if (e.ground && Math.random() < dt * 1.5) flap = true;
+    if (e.grab > 0) { flap = Math.random() < dt * 6; }
+    physics(e, dt, flap, e.dir, t.speed);
+    // bumped into a wall: turn around
+    if (Math.sign(e.vx) !== e.dir && Math.abs(e.vx) > 20) e.dir = Math.sign(e.vx);
+  }
+
+  function lavaTroll(e, dt, isPlayer) {
+    if (G.wave < 3) return false;
+    const g = G.plats.find(p => p.ground);
+    const overGround = e.x > g.x && e.x < g.x + g.w;
+    if (!overGround && e.y > 204 && !e.ground) {
+      if (e.grab <= 0) { e.grab = 1.6; e.escape = 0; A.sfx.tone({ f: 120, f2: 80, d: 0.4, type: 'sawtooth', v: 0.1 }); }
+    }
+    if (e.grab > 0) {
+      e.grab -= dt;
+      e.vy = Math.max(e.vy, 20);
+      e.y = Math.max(e.y, 206);
+      if (e.flapT > 0.14) e.escape++;
+      if (e.escape >= 6) { e.grab = 0; e.vy = -120; e.y = 200; return false; }
+      if (e.grab <= 0) return true;   // pulled under
+    }
+    return false;
+  }
+
+  A = Arcade.start({
+    id: 'lancers', title: 'SKY LANCERS', subtitle: 'A TRIBUTE TO JOUST (1982)', color: '#fd0',
+    width: W, height: H,
+    help: ['LEFT/RIGHT STEER', 'SPACE OR UP FLAPS', '', 'HIT RIDERS FROM ABOVE', 'GRAB THE EGGS BEFORE', 'THEY HATCH'],
+    keys: { fire: ['Space', 'KeyZ', 'KeyJ', 'ArrowUp', 'KeyW'] },
+    touch: { dpad: 'lr', buttons: [{ act: 'fire', label: 'FLAP' }] },
+    newGame(a) {
+      G = { wave: 0, lives: 5, enemies: [], eggs: [], parts: [], pops: [], eggChain: 0, nextLife: 20000, t: 0 };
+      startWave();
+      resetPlayer();
+    },
+    update(a, dt) {
+      G.t += dt; G.waveT += dt;
+      if (G.banner > 0) G.banner -= dt;
+      const p = G.p;
+
+      // spawns
+      for (let i = G.toSpawn.length - 1; i >= 0; i--) {
+        const s = G.toSpawn[i];
+        s.at -= dt;
+        if (s.at <= 0) {
+          const [x, y] = PADS[1 + Math.floor(Math.random() * 3)];
+          const e = mkRider(s.kind, x, y); e.dir = x < 160 ? 1 : -1;
+          G.enemies.push(e); G.toSpawn.splice(i, 1);
+        }
+      }
+
+      // player
+      if (!p.dead) {
+        if (p.spawn > 0) {
+          p.spawn -= dt;
+          if (a.down('left') || a.down('right') || a.pressed('fire')) p.spawn = 0;
+        } else {
+          if (p.inv > 0) p.inv -= dt;
+          const dir = (a.down('right') ? 1 : 0) - (a.down('left') ? 1 : 0);
+          physics(p, dt, a.pressed('fire'), dir, 110);
+          if (p.ground && Math.abs(p.vx) > 20 && Math.floor(p.anim) !== Math.floor(p.anim - Math.abs(p.vx) * dt * 0.25)) a.sfx.tone({ f: 160, d: 0.03, type: 'square', v: 0.04 });
+          if (lavaTroll(p, dt, true) || p.y > LAVA_Y + 6) killPlayer('lava');
+        }
+      } else {
+        G.respawn -= dt;
+        if (G.respawn <= 0) {
+          if (G.lives <= 0) { a.gameOver(); return; }
+          resetPlayer();
+        }
+      }
+
+      // enemies
+      for (let i = G.enemies.length - 1; i >= 0; i--) {
+        const e = G.enemies[i];
+        if (e.spawn > 0) { e.spawn -= dt; continue; }
+        enemyAI(e, dt);
+        if (lavaTroll(e, dt, false) || e.y > LAVA_Y + 6) { G.enemies.splice(i, 1); burst(e.x, LAVA_Y, ['#f80', '#f30'], 12); continue; }
+        if (!p.dead && p.spawn <= 0) joust(p, e, i);
+      }
+      // enemies bump each other
+      for (let i = 0; i < G.enemies.length; i++) for (let j = i + 1; j < G.enemies.length; j++) {
+        const a1 = G.enemies[i], b1 = G.enemies[j];
+        if (a1.spawn > 0 || b1.spawn > 0) continue;
+        if (Math.abs(a1.x - b1.x) < 12 && Math.abs(a1.y - b1.y) < 12) { const s = Math.sign(b1.x - a1.x) || 1; a1.vx = -s * 40; b1.vx = s * 40; a1.dir = -s; b1.dir = s; }
+      }
+
+      // eggs
+      for (let i = G.eggs.length - 1; i >= 0; i--) {
+        const g = G.eggs[i];
+        if (!g.rest) {
+          const py = g.y;
+          g.vy = Math.min(MAXFALL, g.vy + GRAV * dt);
+          g.x += g.vx * dt; g.y += g.vy * dt;
+          if (g.x < 0) g.x += W; if (g.x >= W) g.x -= W;
+          for (const pl of G.plats) {
+            if (g.vy > 0 && xOver(g.x, pl) && py <= pl.y && g.y >= pl.y) {
+              g.y = pl.y;
+              if (g.vy > 40) { g.vy = -g.vy * 0.4; } else { g.vy = 0; g.rest = true; }
+              g.vx *= 0.7;
+            }
+          }
+          if (g.rest) {
+            const pl = G.plats.find(q => Math.abs(q.y - g.y) < 1 && xOver(g.x, q));
+            if (!pl) g.rest = false;
+          }
+          if (g.y > LAVA_Y + 4) { G.eggs.splice(i, 1); continue; }
+        } else {
+          g.x += g.vx * dt; g.vx *= Math.pow(0.05, dt);
+          const pl = G.plats.find(q => Math.abs(q.y - g.y) < 1 && xOver(g.x, q));
+          if (!pl) { g.rest = false; }
+          g.t -= dt;
+          if (g.t <= 0) {
+            const e = mkRider(g.kind, g.x, g.y); e.spawn = 1.2; e.dir = Math.random() < 0.5 ? -1 : 1;
+            G.enemies.push(e); G.eggs.splice(i, 1);
+            a.sfx.tune([[300, .08], [400, .08], [300, .08]], { v: .08 });
+            continue;
+          }
+        }
+        if (!p.dead && p.spawn <= 0) {
+          let dx = g.x - p.x; if (dx > W / 2) dx -= W; if (dx < -W / 2) dx += W;
+          if (Math.abs(dx) < 10 && g.y > p.y - 22 && g.y < p.y + 4) {
+            const pts = EGG_PTS[Math.min(G.eggChain, 3)] + (g.rest ? 0 : 500);
+            G.eggChain++;
+            a.addScore(pts);
+            G.pops.push({ x: g.x, y: g.y - 12, s: String(pts), t: 1 });
+            G.eggs.splice(i, 1);
+            a.sfx.tone({ f: 880, f2: 1760, d: 0.12, type: 'triangle', v: 0.12 });
+          }
+        }
+      }
+
+      // pterodactyl
+      if (!G.ptero && G.waveT > 50 && (G.enemies.length || G.eggs.length)) {
+        const left = Math.random() < 0.5;
+        G.ptero = { x: left ? -20 : W + 20, y: 60 + Math.random() * 100, vx: left ? 120 : -120, flap: 0 };
+        G.waveT = 20;
+        a.sfx.tone({ f: 1800, f2: 400, d: 0.6, type: 'sawtooth', v: 0.1 });
+      }
+      if (G.ptero) {
+        const t = G.ptero;
+        t.x += t.vx * dt; t.flap += dt;
+        if (!p.dead) t.y += Math.sign(p.y - 12 - t.y) * 40 * dt;
+        if (t.x < -40 || t.x > W + 40) { t.vx = -t.vx; t.y = 50 + Math.random() * 120; }
+        if (!p.dead && p.spawn <= 0 && Math.abs(t.x - p.x) < 16 && Math.abs(t.y - (p.y - 12)) < 12) {
+          const facing = Math.sign(t.x - p.x) === p.face && Math.sign(t.vx) === -p.face;
+          const mouthOpen = Math.sin(t.flap * 8) > 0.3;
+          if (facing && mouthOpen && Math.abs(t.y - (p.y - 14)) < 6) {
+            a.addScore(1000); G.pops.push({ x: t.x, y: t.y - 10, s: '1000', t: 1 });
+            burst(t.x, t.y, ['#48f', '#fff', '#f0f'], 30); G.ptero = null;
+            a.sfx.tune([[1200, .06], [900, .06], [1500, .12]], { v: .1 });
+          } else if (p.inv <= 0) killPlayer();
+        }
+      }
+
+      // particles
+      for (let i = G.parts.length - 1; i >= 0; i--) { const q = G.parts[i]; q.vy += 150 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) G.parts.splice(i, 1); }
+      for (let i = G.pops.length - 1; i >= 0; i--) { G.pops[i].t -= dt; G.pops[i].y -= 12 * dt; if (G.pops[i].t <= 0) G.pops.splice(i, 1); }
+
+      if (a.score >= G.nextLife) { G.nextLife += 20000; G.lives++; a.sfx.tune([[784, .08], [1047, .08], [1319, .15]], { v: .1 }); }
+
+      // wave cleared
+      if (!G.toSpawn.length && !G.enemies.length && !G.eggs.length && !p.dead) {
+        G.clearT = (G.clearT || 0) + dt;
+        if (G.clearT > 1.5) {
+          G.clearT = 0;
+          if (G.survival && !G.died) { a.addScore(3000); G.pops.push({ x: W / 2, y: 100, s: 'SURVIVAL BONUS 3000', t: 2 }); }
+          startWave();
+        }
+      }
+    },
+    draw(a) {
+      const c = a.ctx;
+      // lava
+      for (let x = 0; x < W; x += 4) {
+        const h = 3 + Math.sin(x * 0.2 + G.t * 3) * 2;
+        c.fillStyle = '#d31'; c.fillRect(x, LAVA_Y - h + 4, 4, H);
+      }
+      c.fillStyle = '#f80';
+      for (let x = 0; x < W; x += 16) c.fillRect((x + G.t * 10) % W, LAVA_Y + 6 + Math.sin(x + G.t * 4) * 2, 3, 2);
+      // platforms
+      for (const p of G.plats) {
+        c.fillStyle = '#7a4a22'; c.fillRect(p.x, p.y, p.w, p.ground ? 10 : 5);
+        c.fillStyle = '#c7874a'; c.fillRect(p.x, p.y, p.w, 1);
+        c.fillStyle = '#4d2c12';
+        for (let x = p.x + 3; x < p.x + p.w - 2; x += 7) c.fillRect(x, p.y + 2 + (x % 3), 2, 1);
+      }
+      for (const [x, y] of PADS) { c.fillStyle = '#fd0'; c.fillRect(x - 10, y + 1, 20, 1); }
+      // eggs
+      for (const g of G.eggs) {
+        const wob = g.rest && g.t < 2 ? Math.sin(G.t * 30) : 0;
+        c.fillStyle = '#eee'; c.beginPath(); c.ellipse(g.x + wob, g.y - 3, 3, 3.6, 0, 0, 7); c.fill();
+        c.fillStyle = '#9ad'; c.fillRect(g.x - 1 + wob, g.y - 5, 1, 1);
+      }
+      // riders
+      for (const e of G.enemies) {
+        if (e.spawn > 0) { drawSpawn(c, e, TYPES[e.kind].col); continue; }
+        drawRider(c, e, '#2a2', TYPES[e.kind].col, '#8f8');
+      }
+      const p = G.p;
+      if (!p.dead) {
+        if (p.spawn > 0) drawSpawn(c, p, '#fd0');
+        else if (!(p.inv > 0 && Math.floor(G.t * 12) % 2)) drawRider(c, p, '#fd0', '#fff', '#fc6');
+      }
+      // troll hands
+      for (const e of [p, ...G.enemies]) if (e.grab > 0 && !e.dead) {
+        c.fillStyle = '#d60';
+        c.fillRect(e.x - 3, e.y + 2, 6, LAVA_Y - e.y);
+        c.fillRect(e.x - 5, e.y - 1, 10, 4);
+      }
+      if (G.ptero) drawPtero(c, G.ptero);
+      for (const q of G.parts) { c.fillStyle = q.c; c.fillRect(q.x, q.y, 2, 2); }
+      for (const q of G.pops) a.text(q.s, q.x, q.y, 6, '#fff', 'center');
+      // HUD
+      c.fillStyle = '#000'; c.fillRect(0, 0, W, 20);
+      a.text(String(a.score).padStart(6, '0'), 8, 6, 8, '#fd0');
+      a.text('WAVE ' + G.wave, W / 2, 6, 8, '#fff', 'center');
+      for (let i = 0; i < Math.min(G.lives - (p.dead ? 0 : 1), 8); i++) { c.fillStyle = '#fd0'; c.fillRect(W - 12 - i * 9, 7, 6, 6); }
+      a.text('HI ' + a.hi, W - 12 - 8 * 9, 6, 6, '#888', 'right');
+      if (G.banner > 0) {
+        a.text('WAVE ' + G.wave, W / 2, 86, 12, '#fd0', 'center');
+        a.text(G.bannerText, W / 2, 104, 8, '#fff', 'center');
+      }
+    },
+  });
+
+  function drawSpawn(c, e, col) {
+    const k = 1 - Math.max(0, e.spawn) / 1.2;
+    c.fillStyle = col;
+    for (let y = 0; y < 22; y += 2) if (Math.random() < 0.3 + k * 0.7) c.fillRect(e.x - 7 + Math.random() * 14, e.y - y, 2, 1);
+  }
+
+  function drawRider(c, e, mount, knight, beak) {
+    c.save();
+    c.translate(Math.round(e.x), Math.round(e.y));
+    c.scale(e.face, 1);
+    const flying = !e.ground;
+    // legs
+    c.fillStyle = mount === '#fd0' ? '#c90' : '#171';
+    if (flying) { c.fillRect(-2, -6, 2, 3); c.fillRect(1, -6, 3, 2); }
+    else {
+      const f = Math.floor(e.anim) % 2;
+      c.fillRect(f ? -4 : -1, -6, 2, 6); c.fillRect(f ? 1 : -3, -6, 2, 6);
+      c.fillRect(f ? -5 : -2, -1, 3, 1); c.fillRect(f ? 1 : -3, -1, 3, 1);
+    }
+    // bird body
+    c.fillStyle = mount;
+    c.beginPath(); c.ellipse(0, -9, 7, 4, 0, 0, 7); c.fill();
+    c.fillRect(4, -18, 3, 9);                      // neck
+    c.fillRect(4, -20, 6, 3);                      // head
+    c.fillStyle = beak; c.fillRect(10, -19, 3, 2); // beak
+    c.fillStyle = '#000'; c.fillRect(7, -20, 1, 1); // eye
+    c.fillStyle = mount;
+    c.beginPath(); c.moveTo(-6, -11); c.lineTo(-12, -15); c.lineTo(-7, -7); c.fill(); // tail
+    // wing
+    c.fillStyle = mount === '#fd0' ? '#da0' : '#1a1';
+    c.beginPath();
+    if (flying && e.flapT > 0.07) { c.moveTo(-4, -11); c.lineTo(-9, -22); c.lineTo(3, -12); }
+    else if (flying) { c.moveTo(-4, -9); c.lineTo(-10, -1); c.lineTo(3, -8); }
+    else { c.moveTo(-5, -10); c.lineTo(3, -11); c.lineTo(1, -7); }
+    c.fill();
+    // knight
+    c.fillStyle = knight;
+    c.fillRect(-3, -18, 5, 6);
+    c.fillRect(-2, -22, 4, 4);
+    c.fillStyle = '#333'; c.fillRect(0, -21, 2, 1);
+    // lance
+    c.fillStyle = '#ddd'; c.fillRect(-7, -16, 20, 1);
+    c.restore();
+  }
+
+  function drawPtero(c, t) {
+    const f = t.vx > 0 ? 1 : -1;
+    c.save(); c.translate(Math.round(t.x), Math.round(t.y)); c.scale(f, 1);
+    c.fillStyle = '#48f';
+    const up = Math.sin(t.flap * 10) > 0;
+    c.beginPath(); c.moveTo(-14, 0); c.lineTo(10, -2); c.lineTo(10, 2); c.fill();
+    c.beginPath(); c.moveTo(-6, 0); c.lineTo(up ? -2 : 2, up ? -14 : 12); c.lineTo(4, 0); c.fill();
+    const open = Math.sin(t.flap * 8) > 0.3;
+    c.fillStyle = '#9cf';
+    c.beginPath(); c.moveTo(8, -3); c.lineTo(20, open ? -6 : -2); c.lineTo(10, -1); c.fill();
+    c.beginPath(); c.moveTo(8, 1); c.lineTo(20, open ? 5 : 0); c.lineTo(10, 0); c.fill();
+    c.fillStyle = '#f00'; c.fillRect(9, -3, 1, 1);
+    c.restore();
+  }
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

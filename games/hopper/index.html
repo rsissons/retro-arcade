@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Road Hopper</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 224, H = 256, T = 16;
+  const HOME_ROW = 2, START_ROW = 14;
+  const BAYS = [16, 64, 112, 160, 208];   // bay centre x
+  const TIME = 30;
+  // lane: row, dir, base speed (px/s), kind, item widths + gaps
+  const LANES = [
+    { row: 3, dir: 1, speed: 26, kind: 'log', items: [[0, 64], [96, 64], [176, 64]], period: 288 },
+    { row: 4, dir: -1, speed: 34, kind: 'turtle', items: [[0, 32], [64, 32], [128, 32], [192, 32]], period: 256, dive: [2] },
+    { row: 5, dir: 1, speed: 44, kind: 'log', items: [[0, 112], [160, 112]], period: 336 },
+    { row: 6, dir: 1, speed: 20, kind: 'log', items: [[0, 48], [80, 48], [160, 48]], period: 272 },
+    { row: 7, dir: -1, speed: 30, kind: 'turtle', items: [[0, 48], [72, 48], [144, 48], [216, 48]], period: 288, dive: [1] },
+    { row: 9, dir: -1, speed: 24, kind: 'truck', items: [[0, 32], [112, 32]], period: 256 },
+    { row: 10, dir: 1, speed: 60, kind: 'racer', items: [[0, 16]], period: 256 },
+    { row: 11, dir: -1, speed: 28, kind: 'car2', items: [[0, 16], [72, 16], [144, 16]], period: 240 },
+    { row: 12, dir: 1, speed: 22, kind: 'tractor', items: [[0, 16], [80, 16], [160, 16]], period: 240 },
+    { row: 13, dir: -1, speed: 26, kind: 'car1', items: [[0, 16], [80, 16], [160, 16]], period: 240 },
+  ];
+  let G, A;
+
+  function startLevel() {
+    G.level++;
+    G.lanes = LANES.map(l => ({ ...l, off: Math.random() * l.period, speed: l.speed * (1 + (G.level - 1) * 0.18) }));
+    G.homes = [false, false, false, false, false];
+    G.banner = 1.4;
+    newFrog();
+  }
+  function newFrog() {
+    G.f = { x: 112 - 8, row: START_ROW, hop: 0, fromX: 0, fromRow: 0, face: 'up', dead: 0 };
+    G.time = TIME; G.best = START_ROW;
+  }
+  const rowY = r => r * T;
+
+  // items of a lane as [x0, x1] segments in screen space (wrapping)
+  function segments(l) {
+    const out = [];
+    for (const [ix, w] of l.items) {
+      // period >= screen width + item width, so an item fully leaves before it wraps
+      const x = ((ix + l.off * l.dir) % l.period + l.period) % l.period;
+      out.push([x, x + w, ix]);
+      out.push([x - l.period, x - l.period + w, ix]);
+    }
+    return out;
+  }
+  function turtleDown(l, ix) {
+    if (!l.dive || !l.dive.includes(l.items.findIndex(i => i[0] === ix))) return 0;
+    const ph = (G.t * 0.35 + ix * 0.01) % 1;
+    return ph < 0.6 ? 0 : ph < 0.7 ? 1 : ph < 0.9 ? 2 : 1;   // 0 up, 1 half, 2 under
+  }
+
+  function die(why) {
+    G.f.dead = 1.6; G.f.why = why;
+    A.sfx.tune([[392, .1], [330, .1], [262, .1], [196, .25]], { v: .1, type: 'triangle' });
+  }
+
+  A = Arcade.start({
+    id: 'hopper', title: 'ROAD HOPPER', subtitle: 'A TRIBUTE TO FROGGER (1981)', color: '#3f3',
+    width: W, height: H,
+    help: ['ARROWS HOP', '', 'CROSS THE ROAD', 'RIDE THE LOGS AND TURTLES', 'FILL ALL FIVE HOMES'],
+    touch: { dpad: '4', buttons: [] },
+    newGame(a) {
+      G = { level: 0, lives: 4, t: 0, fly: null, flyT: 6, extra: false };
+      startLevel();
+      a.sfx.tune([[523, .12], [659, .12], [784, .12], [659, .12], [784, .24]], { v: .08 });
+    },
+    update(a, dt) {
+      G.t += dt;
+      for (const l of G.lanes) l.off += l.speed * dt;
+      if (G.banner > 0) { G.banner -= dt; return; }
+      const f = G.f;
+      if (f.dead > 0) {
+        f.dead -= dt;
+        if (f.dead <= 0) {
+          G.lives--;
+          if (G.lives <= 0) { a.gameOver(); return; }
+          newFrog();
+        }
+        return;
+      }
+      // fly visits empty homes
+      G.flyT -= dt;
+      if (G.flyT <= 0) {
+        if (G.fly) { G.fly = null; G.flyT = 4 + Math.random() * 4; }
+        else { const free = G.homes.map((h, i) => h ? -1 : i).filter(i => i >= 0); if (free.length) G.fly = A.pick(free); G.flyT = 5; }
+      }
+      G.time -= dt;
+      if (G.time <= 0) { die('time'); return; }
+
+      // hopping
+      if (f.hop > 0) {
+        f.hop -= dt;
+        if (f.hop <= 0) f.hop = 0;
+      } else {
+        let dx = 0, dr = 0;
+        if (a.pressed('up')) { dr = -1; f.face = 'up'; }
+        else if (a.pressed('down')) { dr = 1; f.face = 'down'; }
+        else if (a.pressed('left')) { dx = -T; f.face = 'left'; }
+        else if (a.pressed('right')) { dx = T; f.face = 'right'; }
+        if (dx || dr) {
+          const nr = Math.max(HOME_ROW, Math.min(START_ROW, f.row + dr));
+          const nx = Math.max(0, Math.min(W - T, f.x + dx));
+          f.fromX = f.x; f.fromRow = f.row;
+          f.x = nx; f.row = nr; f.hop = 0.1;
+          a.sfx.tone({ f: 500, f2: 800, d: 0.05, type: 'square', v: 0.06 });
+          if (nr < G.best) { G.best = nr; a.addScore(10); }
+          if (nr === HOME_ROW) {
+            const cx = f.x + 8;
+            const bay = BAYS.findIndex(b => Math.abs(b - cx) < 9);
+            if (bay < 0 || G.homes[bay]) { die('hedge'); return; }
+            G.homes[bay] = true;
+            let pts = 50 + Math.floor(G.time * 2) * 10;
+            if (G.fly === bay) { pts += 200; G.fly = null; }
+            a.addScore(pts);
+            G.pop = { x: BAYS[bay], y: rowY(HOME_ROW), s: String(pts), t: 1.2 };
+            a.sfx.tune([[784, .08], [988, .08], [1175, .08], [1568, .2]], { v: .1 });
+            if (G.homes.every(Boolean)) { a.addScore(1000); startLevel(); }
+            else newFrog();
+            return;
+          }
+        }
+      }
+
+      // interactions once the hop has landed
+      if (f.hop === 0) {
+        const lane = G.lanes.find(l => l.row === f.row);
+        const fx0 = f.x + 3, fx1 = f.x + 13;
+        if (lane && lane.row <= 7) {
+          let ride = false;
+          for (const [x0, x1, ix] of segments(lane)) {
+            if (fx1 > x0 + 2 && fx0 < x1 - 2) {
+              if (lane.kind === 'turtle' && turtleDown(lane, ix) === 2) continue;
+              ride = true;
+            }
+          }
+          if (!ride) { die('water'); return; }
+          f.x += lane.speed * lane.dir * dt;
+          if (f.x < -6 || f.x > W - 10) { die('water'); return; }
+        } else if (lane) {
+          for (const [x0, x1] of segments(lane)) if (fx1 > x0 + 1 && fx0 < x1 - 1) { die('road'); return; }
+        }
+      }
+      if (G.pop) { G.pop.t -= dt; if (G.pop.t <= 0) G.pop = null; }
+      if (!G.extra && a.score >= 20000) { G.extra = true; G.lives++; }
+    },
+    draw(a) {
+      const c = a.ctx;
+      // water and road
+      c.fillStyle = '#001a6e'; c.fillRect(0, rowY(2), W, T * 6);
+      c.fillStyle = '#000'; c.fillRect(0, rowY(9), W, T * 5);
+      // home hedge
+      c.fillStyle = '#1b8a2a'; c.fillRect(0, rowY(1) + 8, W, T + 8);
+      c.fillStyle = '#0c5a18'; for (let x = 0; x < W; x += 4) c.fillRect(x, rowY(1) + 8 + (x % 8 ? 2 : 0), 2, 2);
+      for (let i = 0; i < 5; i++) {
+        c.fillStyle = '#001a6e'; c.fillRect(BAYS[i] - 10, rowY(2), 20, T);
+        if (G.homes[i]) drawFrog(c, BAYS[i] - 8, rowY(2), 'down', '#3f3');
+        else if (G.fly === i) { c.fillStyle = '#ddd'; c.fillRect(BAYS[i] - 2, rowY(2) + 6, 4, 4); c.fillStyle = '#aaf'; c.fillRect(BAYS[i] - 5, rowY(2) + 4, 3, 3); c.fillRect(BAYS[i] + 2, rowY(2) + 4, 3, 3); }
+      }
+      // sidewalks
+      for (const r of [8, 14]) {
+        c.fillStyle = '#5a2a8a'; c.fillRect(0, rowY(r), W, T);
+        c.fillStyle = '#7a44b0'; for (let x = 0; x < W; x += 8) c.fillRect(x + (r % 2) * 4, rowY(r) + 3, 4, 2);
+      }
+      // lane lines
+      c.fillStyle = '#444'; for (let r = 10; r <= 13; r++) for (let x = 0; x < W; x += 16) c.fillRect(x + 4, rowY(r), 8, 1);
+      // lanes
+      for (const l of G.lanes) {
+        const y = rowY(l.row);
+        for (const [x0, x1, ix] of segments(l)) drawItem(c, l, x0, x1, y, ix);
+      }
+      // frog
+      const f = G.f;
+      if (f.dead > 0) {
+        const k = 1.6 - f.dead;
+        if (f.why === 'water') { c.strokeStyle = '#9cf'; c.beginPath(); c.arc(f.x + 8, rowY(f.row) + 8, 2 + k * 6, 0, 7); c.stroke(); }
+        else { c.fillStyle = '#fff'; c.font = '12px sans-serif'; a.text('X', f.x + 8, rowY(f.row) + 4, 8, '#f33', 'center'); }
+      } else {
+        const k = f.hop > 0 ? f.hop / 0.1 : 0;
+        const x = f.x + (f.fromX - f.x) * k, y = rowY(f.row) + (rowY(f.fromRow) - rowY(f.row)) * k;
+        drawFrog(c, x, y, f.face, '#3f3', k > 0);
+      }
+      if (G.pop) a.text(G.pop.s, G.pop.x, G.pop.y + 4, 6, '#fff', 'center');
+      // HUD
+      a.text('1-UP', 8, 0, 8, '#fff');
+      a.text(String(a.score).padStart(5, '0'), 8, 9, 8, '#f33');
+      a.text('HI-SCORE', W - 8, 0, 8, '#fff', 'right');
+      a.text(String(a.hi).padStart(5, '0'), W - 8, 9, 8, '#f33', 'right');
+      for (let i = 0; i < Math.min(G.lives - 1, 7); i++) drawFrog(c, 2 + i * 10, rowY(15) + 1, 'up', '#3f3', false, 0.55);
+      const frac = Math.max(0, G.time / TIME);
+      c.fillStyle = frac < 0.25 ? '#f33' : '#3f3';
+      c.fillRect(W - 8 - 110 * frac, rowY(15) + 9, 110 * frac, 5);
+      a.text('TIME', W - 124, rowY(15) + 8, 6, '#ff0', 'right');
+      a.text('L' + G.level, 94, rowY(15) + 1, 6, '#fff');
+      if (G.banner > 0) a.text('LEVEL ' + G.level, W / 2, rowY(8) + 4, 8, '#ff0', 'center');
+    },
+  });
+
+  function drawItem(c, l, x0, x1, y, ix) {
+    const w = x1 - x0;
+    if (l.kind === 'log') {
+      c.fillStyle = '#7a4a1c'; c.fillRect(x0, y + 3, w, 10);
+      c.fillStyle = '#a86a30'; c.fillRect(x0, y + 4, w, 2);
+      c.fillStyle = '#5a3210'; for (let x = x0 + 6; x < x1 - 4; x += 11) c.fillRect(x, y + 8, 4, 1);
+      c.fillStyle = '#c89050'; c.fillRect(x1 - 3, y + 3, 3, 10);
+    } else if (l.kind === 'turtle') {
+      const st = turtleDown(l, ix);
+      if (st === 2) { c.fillStyle = '#123a8a'; for (let x = x0; x < x1; x += 16) c.fillRect(x + 4, y + 7, 8, 2); return; }
+      for (let x = x0; x < x1; x += 16) {
+        c.fillStyle = st ? '#7a2a2a' : '#c33'; c.beginPath(); c.ellipse(x + 8, y + 8, 6, 5, 0, 0, 7); c.fill();
+        c.fillStyle = st ? '#3a6a3a' : '#3c3'; c.fillRect(x + (l.dir < 0 ? 1 : 13), y + 6, 3, 4);
+        c.fillStyle = '#922'; c.fillRect(x + 6, y + 5, 4, 1); c.fillRect(x + 6, y + 10, 4, 1);
+      }
+    } else {
+      const cols = { truck: '#eee', racer: '#fff', car2: '#f5c', tractor: '#3c3', car1: '#fe3' };
+      c.fillStyle = cols[l.kind];
+      if (l.kind === 'truck') { c.fillRect(x0, y + 3, w - 8, 10); c.fillStyle = '#c33'; c.fillRect(l.dir < 0 ? x0 : x1 - 8, y + 4, 8, 8); }
+      else if (l.kind === 'racer') { c.fillRect(x0 + 1, y + 5, 14, 6); c.fillStyle = '#f33'; c.fillRect(x0 + 5, y + 4, 5, 8); }
+      else if (l.kind === 'tractor') { c.fillRect(x0 + 2, y + 5, 12, 6); c.fillStyle = '#333'; c.fillRect(x0 + 1, y + 2, 5, 12); }
+      else { c.fillRect(x0 + 1, y + 4, 14, 8); c.fillStyle = '#39f'; c.fillRect(x0 + 5, y + 5, 5, 6); }
+      c.fillStyle = '#222';
+      c.fillRect(x0 + 2, y + 2, 4, 2); c.fillRect(x1 - 6, y + 2, 4, 2); c.fillRect(x0 + 2, y + 12, 4, 2); c.fillRect(x1 - 6, y + 12, 4, 2);
+    }
+  }
+  function drawFrog(c, x, y, face, col, jumping, scale) {
+    scale = scale || 1;
+    c.save();
+    c.translate(x + 8 * scale, y + 8 * scale);
+    c.scale(scale, scale);
+    c.rotate({ up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[face]);
+    c.fillStyle = col;
+    c.fillRect(-4, -5, 8, 10);
+    const leg = jumping ? 2 : 0;
+    c.fillRect(-7, -6 - leg, 3, 4); c.fillRect(4, -6 - leg, 3, 4);
+    c.fillRect(-7, 3 + leg, 3, 4); c.fillRect(4, 3 + leg, 3, 4);
+    c.fillStyle = '#ff3'; c.fillRect(-3, -2, 6, 1);
+    c.fillStyle = '#f0f'; c.fillRect(-4, -5, 2, 2); c.fillRect(2, -5, 2, 2);
+    c.restore();
+  }
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

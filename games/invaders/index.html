@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Invader Wave</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 224, H = 256;
+  const PY = 216, BUNKER_Y = 184;
+  const S = Arcade.sprite;
+  const pal = c => ({ '#': c });
+  const ROWS = [
+    { pts: 30, f: [['...##...', '..####..', '.######.', '##.##.##', '########', '..#..#..', '.#.##.#.', '#.#..#.#'], ['...##...', '..####..', '.######.', '##.##.##', '########', '.#.##.#.', '#......#', '.#....#.']] },
+    { pts: 20, f: [['..#.....#..', '...#...#...', '..#######..', '.##.###.##.', '###########', '#.#######.#', '#.#.....#.#', '...##.##...'], ['..#.....#..', '#..#...#..#', '#.#######.#', '###.###.###', '###########', '.#########.', '..#.....#..', '.#.......#.']] },
+    { pts: 10, f: [['....####....', '.##########.', '############', '###..##..###', '############', '...##..##...', '..##.##.##..', '##........##'], ['....####....', '.##########.', '############', '###..##..###', '############', '..###..###..', '.##..##..##.', '..##....##..']] },
+  ];
+  const ROW_KIND = [0, 1, 1, 2, 2];
+  const ROW_COL = ['#fff', '#fff', '#fff', '#fff', '#fff'];
+  const IMG = {
+    inv: ROWS.map(r => r.f.map(f => S(f, pal('#fff')))),
+    cannon: S(['......#......', '.....###.....', '.....###.....', '.###########.', '#############', '#############', '#############', '#############'], pal('#3f6')),
+    ufo: S(['.....######.....', '...##########...', '..############..', '.##.##.##.##.##.', '################', '..###..##..###..', '...#........#...'], pal('#f33')),
+    boom: S(['#...#..#...#', '.#...#...#..', '..#.....#...', '...#...#....', '##.......##.', '...#...#....', '..#..#..#...', '.#...#...#..'], pal('#fff')),
+  };
+  const BUNKER = [
+    '....##############....',
+    '...################...',
+    '..##################..',
+    '.####################.',
+    '######################',
+    '######################',
+    '######################',
+    '######################',
+    '######################',
+    '######################',
+    '######################',
+    '######################',
+    '#######........#######',
+    '######..........######',
+    '#####............#####',
+    '#####............#####',
+  ];
+  let G, A;
+
+  function newBunkers() {
+    G.bunkers = [];
+    for (let i = 0; i < 4; i++) {
+      const x = 28 + i * 46;
+      const px = BUNKER.map(r => r.split('').map(ch => ch === '#'));
+      G.bunkers.push({ x, y: BUNKER_Y, px });
+    }
+  }
+  function bunkerHit(x, y, r) {
+    for (const b of G.bunkers) {
+      const lx = Math.floor(x - b.x), ly = Math.floor(y - b.y);
+      if (lx < 0 || ly < 0 || ly >= 16 || lx >= 22) continue;
+      if (!b.px[ly][lx]) continue;
+      // splat: clear a ragged blob
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const X = lx + dx, Y = ly + dy;
+        if (X >= 0 && Y >= 0 && X < 22 && Y < 16 && Math.random() < 0.8 - Math.hypot(dx, dy) * 0.15) b.px[Y][X] = false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function startRound() {
+    G.round++;
+    G.inv = [];
+    const top = 48 + Math.min(G.round - 1, 6) * 8;
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 11; c++) G.inv.push({ r, c, x: 24 + c * 16, y: top + r * 16, alive: true });
+    G.dir = 1; G.frame = 0; G.stepT = 0; G.dropNext = false; G.cursor = 0;
+    G.shots = []; G.shot = null; G.fireT = 1;
+    G.ufo = null; G.ufoT = 20;
+    G.banner = 1.5;
+    newBunkers();
+  }
+
+  function aliveInv() { return G.inv.filter(i => i.alive); }
+
+  A = Arcade.start({
+    id: 'invaders', title: 'INVADER WAVE', subtitle: 'A TRIBUTE TO SPACE INVADERS (1978)', color: '#3f6',
+    width: W, height: H,
+    help: ['LEFT/RIGHT MOVE', 'SPACE FIRE', '', '? MYSTERY', '30 POINTS', '20 POINTS', '10 POINTS'],
+    touch: { dpad: 'lr', buttons: [{ act: 'fire', label: 'FIRE' }] },
+    newGame(a) {
+      G = { round: 0, lives: 3, extra: false, t: 0, px: 20, dead: 0, beat: 0, parts: [], shotsFired: 0 };
+      startRound();
+    },
+    update(a, dt) {
+      G.t += dt;
+      if (G.banner > 0) { G.banner -= dt; return; }
+      // player
+      if (G.dead > 0) {
+        G.dead -= dt;
+        if (G.dead <= 0) {
+          if (G.lives <= 0) { a.gameOver(); return; }
+          G.px = 20; G.shots = [];
+        }
+        return;
+      }
+      if (a.down('left')) G.px -= 60 * dt;
+      if (a.down('right')) G.px += 60 * dt;
+      G.px = Math.max(8, Math.min(W - 20, G.px));
+      if (a.pressed('fire') && !G.shot) {
+        G.shot = { x: G.px + 6, y: PY - 4 };
+        G.shotsFired++;
+        a.sfx.tone({ f: 1600, f2: 400, d: 0.12, type: 'square', v: 0.05 });
+      }
+
+      // invader march: one step per tick, faster as they thin out
+      const alive = aliveInv();
+      const n = alive.length;
+      const interval = Math.max(0.016, 0.55 * (n / 55) ** 1.25) / (1 + (G.round - 1) * 0.08);
+      G.stepT -= dt;
+      if (G.stepT <= 0 && n) {
+        G.stepT = interval;
+        G.frame ^= 1;
+        if (G.dropNext) {
+          for (const i of alive) i.y += 8;
+          G.dir = -G.dir; G.dropNext = false;
+        } else {
+          for (const i of alive) i.x += 2 * G.dir;
+          const minX = Math.min(...alive.map(i => i.x)), maxX = Math.max(...alive.map(i => i.x + 12));
+          if (maxX >= W - 6 || minX <= 6) G.dropNext = true;
+        }
+        const notes = [98, 87, 78, 73];
+        a.sfx.tone({ f: notes[G.beat++ % 4], d: 0.09, type: 'square', v: 0.14 });
+        // invaders chew through bunkers and win at the bottom
+        for (const i of alive) {
+          for (let k = 0; k < 12; k += 3) bunkerHit(i.x + k, i.y + 7, 2);
+          if (i.y + 8 >= PY) { G.lives = 0; G.dead = 1.5; a.sfx.noise({ d: 1, v: .4, f: 900, f2: 60 }); return; }
+        }
+      }
+
+      // player shot
+      if (G.shot) {
+        const s = G.shot;
+        s.y -= 260 * dt;
+        let gone = s.y < 20;
+        if (!gone) for (const i of alive) {
+          const w = ROWS[ROW_KIND[i.r]].f[0][0].length;
+          const ox = (12 - w) / 2;
+          if (s.x >= i.x + ox && s.x <= i.x + ox + w && s.y >= i.y && s.y <= i.y + 8) {
+            i.alive = false;
+            a.addScore(ROWS[ROW_KIND[i.r]].pts);
+            G.parts.push({ x: i.x, y: i.y, t: 0.25, img: IMG.boom });
+            a.sfx.noise({ d: 0.2, v: 0.25, f: 3000, f2: 300 });
+            gone = true; break;
+          }
+        }
+        if (!gone && G.ufo && s.y < G.ufo.y + 7 && s.y > G.ufo.y && s.x > G.ufo.x && s.x < G.ufo.x + 16) {
+          const pts = [100, 50, 50, 100, 150, 100, 100, 50, 300, 100, 100, 100, 50, 150, 100][G.shotsFired % 15];
+          a.addScore(pts);
+          G.parts.push({ x: G.ufo.x, y: G.ufo.y, t: 1.2, text: String(pts) });
+          G.ufo = null; gone = true;
+          a.sfx.tune([[1200, .06], [900, .06], [1500, .1]], { v: .1 });
+        }
+        if (!gone && bunkerHit(s.x, s.y, 2)) gone = true;
+        if (!gone) for (let k = G.shots.length - 1; k >= 0; k--) {
+          const b = G.shots[k];
+          if (Math.abs(b.x - s.x) < 3 && Math.abs(b.y - s.y) < 5) { G.shots.splice(k, 1); gone = true; break; }
+        }
+        if (gone) G.shot = null;
+      }
+
+      // invader shots
+      G.fireT -= dt;
+      if (G.fireT <= 0 && n && G.shots.length < 3) {
+        G.fireT = Math.max(0.35, 1.2 - G.round * 0.08) * (0.5 + Math.random());
+        // pick a column; half the time the one above the player
+        const cols = [...new Set(alive.map(i => i.c))];
+        let col = Math.random() < 0.5 ? alive.reduce((b, i) => Math.abs(i.x + 6 - G.px - 6) < Math.abs(b.x + 6 - G.px - 6) ? i : b).c : A.pick(cols);
+        const shooter = alive.filter(i => i.c === col).reduce((b, i) => i.y > b.y ? i : b);
+        G.shots.push({ x: shooter.x + 6, y: shooter.y + 8, kind: A.randi(0, 2), speed: 70 + Math.min(G.round, 6) * 6 });
+      }
+      for (let k = G.shots.length - 1; k >= 0; k--) {
+        const b = G.shots[k];
+        b.y += b.speed * dt;
+        if (b.y > PY + 12) { G.shots.splice(k, 1); continue; }
+        if (bunkerHit(b.x, b.y + 4, 2)) { G.shots.splice(k, 1); continue; }
+        if (b.y + 6 >= PY && b.y <= PY + 8 && b.x >= G.px && b.x <= G.px + 13) {
+          G.shots.splice(k, 1);
+          G.lives--; G.dead = 1.8;
+          a.sfx.noise({ d: 1.2, v: 0.4, f: 1200, f2: 60 });
+          return;
+        }
+      }
+
+      // mystery ship
+      if (G.ufo) {
+        G.ufo.x += G.ufo.vx * dt;
+        if (Math.floor(G.t * 8) !== Math.floor((G.t - dt) * 8)) a.sfx.tone({ f: 620, f2: 700, d: 0.1, type: 'sine', v: 0.05 });
+        if (G.ufo.x < -20 || G.ufo.x > W + 4) G.ufo = null;
+      } else if (n > 7) {
+        G.ufoT -= dt;
+        if (G.ufoT <= 0) { G.ufoT = 22 + Math.random() * 8; const l = G.shotsFired % 2; G.ufo = { x: l ? -16 : W, y: 36, vx: l ? 40 : -40 }; }
+      }
+
+      for (let k = G.parts.length - 1; k >= 0; k--) { G.parts[k].t -= dt; if (G.parts[k].t <= 0) G.parts.splice(k, 1); }
+      if (!G.extra && a.score >= 1500) { G.extra = true; G.lives++; a.sfx.tune([[880, .08], [1320, .12]], { v: .1 }); }
+      if (!n && !G.parts.length) startRound();
+    },
+    draw(a) {
+      const c = a.ctx;
+      a.text('SCORE', 8, 4, 8, '#fff');
+      a.text(String(a.score).padStart(4, '0'), 16, 16, 8, '#fff');
+      a.text('HI-SCORE', W - 8, 4, 8, '#fff', 'right');
+      a.text(String(a.hi).padStart(4, '0'), W - 24, 16, 8, '#fff', 'right');
+      for (const i of G.inv) {
+        if (!i.alive) continue;
+        const img = IMG.inv[ROW_KIND[i.r]][G.frame];
+        c.drawImage(img, Math.round(i.x + (12 - img.width) / 2), Math.round(i.y));
+      }
+      if (G.ufo) c.drawImage(IMG.ufo, Math.round(G.ufo.x), G.ufo.y);
+      for (const p of G.parts) {
+        if (p.text) a.text(p.text, p.x + 8, p.y, 8, '#f33', 'center');
+        else c.drawImage(p.img, Math.round(p.x), Math.round(p.y));
+      }
+      // bunkers
+      c.fillStyle = '#3f6';
+      for (const b of G.bunkers) for (let y = 0; y < 16; y++) for (let x = 0; x < 22; x++) if (b.px[y][x]) c.fillRect(b.x + x, b.y + y, 1, 1);
+      // player
+      if (G.dead > 0) {
+        if (Math.floor(G.t * 10) % 2) { c.fillStyle = '#3f6'; for (let k = 0; k < 10; k++) c.fillRect(G.px + Math.random() * 13, PY + 2 + Math.random() * 6, 2, 1); }
+      } else c.drawImage(IMG.cannon, Math.round(G.px), PY);
+      if (G.shot) { c.fillStyle = '#fff'; c.fillRect(Math.round(G.shot.x), Math.round(G.shot.y), 1, 4); }
+      c.fillStyle = '#fff';
+      for (const b of G.shots) {
+        const x = Math.round(b.x), y = Math.round(b.y), f = Math.floor(G.t * 12) % 2;
+        if (b.kind === 0) { c.fillRect(x, y, 1, 7); c.fillRect(x - 1, y + (f ? 2 : 4), 3, 1); }
+        else if (b.kind === 1) { for (let k = 0; k < 7; k++) c.fillRect(x + ((k + f) % 2 ? -1 : 1), y + k, 1, 1); }
+        else { c.fillRect(x, y, 1, 7); c.fillRect(x - 1, y + 6, 3, 1); }
+      }
+      c.fillStyle = '#3f6'; c.fillRect(0, PY + 12, W, 1);
+      a.text(String(G.lives), 8, PY + 16, 8, '#fff');
+      for (let k = 0; k < Math.min(G.lives - 1, 5); k++) c.drawImage(IMG.cannon, 20 + k * 16, PY + 16);
+      a.text('ROUND ' + G.round, W - 8, PY + 16, 8, '#fff', 'right');
+      if (G.banner > 0) a.text('ROUND ' + G.round, W / 2, 130, 8, '#3f6', 'center');
+    },
+  });
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

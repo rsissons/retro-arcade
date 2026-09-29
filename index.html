@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Retro Arcade</title>
+<meta name="description" content="Ten classic 80s arcade games, rebuilt to play free in your browser.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
+<style>
+  :root { --bg: #07060d; --card: #13101d; --edge: #2a2440; --ink: #e8e6f0; --dim: #8a86a0; --neon: #00e5ff; --hot: #ff2bd6; --sun: #ffd400; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: "VT323", monospace; font-size: 20px;
+    background:
+      radial-gradient(ellipse at 50% -10%, rgba(255, 43, 214, 0.18), transparent 60%),
+      linear-gradient(transparent 60%, rgba(0, 229, 255, 0.05)),
+      var(--bg);
+    min-height: 100vh;
+  }
+  header { text-align: center; padding: 38px 16px 10px; }
+  h1 {
+    font-family: "Press Start 2P", monospace; font-weight: normal;
+    font-size: clamp(26px, 6vw, 56px); margin: 0; letter-spacing: 4px;
+    color: #fff;
+    text-shadow: 0 0 6px var(--hot), 0 0 18px var(--hot), 0 0 40px rgba(255, 43, 214, 0.6);
+    animation: flicker 6s infinite;
+  }
+  @keyframes flicker { 0%, 92%, 100% { opacity: 1; } 93% { opacity: .55; } 94% { opacity: 1; } 96% { opacity: .7; } }
+  .tag { color: var(--neon); margin: 14px 0 0; font-size: 22px; text-shadow: 0 0 6px rgba(0, 229, 255, .5); }
+  .coin { font-family: "Press Start 2P", monospace; font-size: 11px; color: var(--sun); margin-top: 18px; animation: blink 1.2s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 16px 30px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; }
+  .cab {
+    display: flex; flex-direction: column;
+    background: linear-gradient(#1b1729, var(--card));
+    border: 2px solid var(--edge); border-radius: 12px;
+    text-decoration: none; color: inherit; overflow: hidden;
+    transition: transform .15s, border-color .15s, box-shadow .15s;
+  }
+  .cab:hover, .cab:focus-visible { transform: translateY(-3px); border-color: var(--c); box-shadow: 0 0 22px color-mix(in srgb, var(--c) 45%, transparent); outline: none; }
+  .marquee {
+    font-family: "Press Start 2P", monospace; font-size: 11px; text-align: center;
+    padding: 10px 6px; color: #000; background: var(--c); letter-spacing: 1px;
+  }
+  .shot.top { object-position: left top; }
+  .shot { aspect-ratio: 4 / 3; background: #000; display: block; width: 100%; object-fit: cover; object-position: center 35%; border-bottom: 2px solid var(--edge); }
+  .info { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+  .orig { color: var(--dim); font-size: 18px; }
+  .hi { margin-top: auto; padding-top: 6px; font-family: "Press Start 2P", monospace; font-size: 9px; color: var(--sun); }
+  .real { font-family: "Press Start 2P", monospace; font-size: 8px; color: #33ff66; }
+  .help {
+    margin: 34px auto 0; max-width: 760px; border: 2px dashed var(--edge); border-radius: 12px; padding: 14px 18px;
+    color: var(--dim); line-height: 1.25;
+  }
+  .help b { color: var(--ink); font-weight: normal; }
+  footer { text-align: center; color: #5d5874; font-size: 17px; padding: 10px 16px 34px; line-height: 1.3; }
+  footer a { color: var(--dim); }
+  @media (max-width: 480px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } .marquee { font-size: 8px; padding: 8px 4px; } .orig { font-size: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>RETRO ARCADE</h1>
+  <p class="tag">Ten 80s classics. No quarters required.</p>
+  <div class="coin">INSERT COIN</div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="help">
+    <b>Keyboard:</b> arrow keys to move, Space to fire, P to pause, M for sound, Enter to start.<br>
+    <b>iPad and phones:</b> on-screen buttons show up automatically. City Shield is tap to fire.<br>
+    <b>Save to home screen:</b> in Safari tap Share, then Add to Home Screen.<br>
+    High scores are kept on each device.
+  </div>
+</main>
+<footer>
+  Every game except Zork is an original rebuild, made as a tribute to the arcade classic it's named after, and uses none of the original code or artwork.<br>
+  Zork I is the real 1980 Infocom game, released under the MIT license by Microsoft in 2025 (<a href="https://github.com/historicalsource/zork1" target="_blank" rel="noopener">source</a>).
+</footer>
+<script>
+  const GAMES = [
+    { id: 'rocks', name: 'ROCK STORM', orig: 'Asteroids, 1979', c: '#e8e6f0' },
+    { id: 'swarm', name: 'STAR SWARM', orig: 'Galaga, 1981', c: '#00e5ff' },
+    { id: 'muncher', name: 'MAZE MUNCHER', orig: 'Pac-Man, 1980', c: '#ffd400' },
+    { id: 'zork', name: 'ZORK I', orig: 'Zork I, 1980', c: '#33ff66', real: true },
+    { id: 'lancers', name: 'SKY LANCERS', orig: 'Joust, 1982', c: '#ff9a1f' },
+    { id: 'guardian', name: 'PLANET GUARDIAN', orig: 'Defender, 1981', c: '#2ee82e' },
+    { id: 'invaders', name: 'INVADER WAVE', orig: 'Space Invaders, 1978', c: '#7dff9a' },
+    { id: 'hopper', name: 'ROAD HOPPER', orig: 'Frogger, 1981', c: '#b6ff3b' },
+    { id: 'shield', name: 'CITY SHIELD', orig: 'Missile Command, 1980', c: '#ff4a4a' },
+    { id: 'bugs', name: 'BUG BLASTER', orig: 'Centipede, 1981', c: '#ff2bd6' },
+  ];
+  const grid = document.getElementById('grid');
+  const hi = id => { try { return parseInt(localStorage.getItem('arcade.hi.' + id) || '0', 10) || 0; } catch (e) { return 0; } };
+  for (const g of GAMES) {
+    const a = document.createElement('a');
+    a.className = 'cab';
+    a.href = 'games/' + g.id + '/index.html';
+    a.style.setProperty('--c', g.c);
+    const h = hi(g.id);
+    a.innerHTML =
+      '<div class="marquee"></div>' +
+      '<img class="shot" loading="lazy" alt="">' +
+      '<div class="info"><span class="orig"></span>' +
+      (g.real ? '<span class="real">THE REAL GAME</span>' : '') +
+      '<span class="hi"></span></div>';
+    a.querySelector('.marquee').textContent = g.name;
+    const img = a.querySelector('.shot');
+    img.src = 'assets/thumbs/' + g.id + '.jpg';
+    if (g.real) img.classList.add('top');
+    img.alt = g.name + ' gameplay';
+    a.querySelector('.orig').textContent = (g.real ? '' : 'Tribute to ') + g.orig;
+    a.querySelector('.hi').textContent = g.real ? '' : (h ? 'HI ' + h : '');
+    grid.appendChild(a);
+  }
+</script>
+</body>
+</html>

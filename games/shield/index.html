@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>City Shield</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 320, H = 240, GROUND = 222;
+  const BASES = [22, 160, 298];
+  const CITIES = [58, 88, 118, 202, 232, 262];
+  const COLORS = [
+    { sky: '#000', ground: '#dd0', enemy: '#f33', mine: '#39f', city: '#0cf' },
+    { sky: '#000', ground: '#39f', enemy: '#ff3', mine: '#3f3', city: '#f3c' },
+    { sky: '#000', ground: '#f60', enemy: '#3f3', mine: '#fff', city: '#39f' },
+    { sky: '#102', ground: '#c3f', enemy: '#0ff', mine: '#ff3', city: '#3f3' },
+  ];
+  let G, A;
+
+  const mult = () => Math.min(6, Math.ceil(G.wave / 2));
+  const pal = () => COLORS[Math.floor((G.wave - 1) / 2) % COLORS.length];
+
+  function startWave() {
+    G.wave++;
+    G.ammo = [10, 10, 10];
+    G.baseAlive = [true, true, true];
+    while (G.bonusCities > 0 && G.cities.includes(false)) { G.cities[G.cities.indexOf(false)] = true; G.bonusCities--; }
+    G.toLaunch = 10 + G.wave * 2;
+    G.launchT = 1.5;
+    G.enemies = []; G.mine = []; G.booms = []; G.flyers = [];
+    G.flyerT = G.wave >= 2 ? 6 + Math.random() * 6 : Infinity;
+    G.banner = 2.2; G.summary = null;
+    A.sfx.tune([[392, .1], [523, .1], [659, .1], [784, .25]], { v: .08 });
+  }
+
+  function targets() {
+    const t = [];
+    CITIES.forEach((x, i) => { if (G.cities[i]) t.push(x); });
+    BASES.forEach((x, i) => { if (G.baseAlive[i]) t.push(x); });
+    if (!t.length) t.push(A.pick(CITIES));
+    return t;
+  }
+  function launch(x, y, tx) {
+    const speed = 16 + G.wave * 3.5;
+    const dx = tx - x, dy = GROUND - y, d = Math.hypot(dx, dy);
+    G.enemies.push({ sx: x, sy: y, x, y, vx: dx / d * speed, vy: dy / d * speed, tx, split: G.wave >= 2 && Math.random() < 0.25 ? 70 + Math.random() * 60 : 0 });
+  }
+
+  function fire(base, tx, ty) {
+    if (G.banner > 0 || G.summary) return;
+    if (ty > GROUND - 14) ty = GROUND - 14;
+    let b = base;
+    if (b == null) {
+      let best = -1, bd = Infinity;
+      BASES.forEach((x, i) => { if (G.baseAlive[i] && G.ammo[i] > 0 && Math.abs(x - tx) < bd) { bd = Math.abs(x - tx); best = i; } });
+      b = best;
+    }
+    if (b < 0 || !G.baseAlive[b] || G.ammo[b] <= 0) { A.sfx.tone({ f: 120, d: 0.08, type: 'square', v: 0.05 }); return; }
+    G.ammo[b]--;
+    const sx = BASES[b], sy = GROUND - 8;
+    const speed = b === 1 ? 380 : 260;
+    const d = Math.hypot(tx - sx, ty - sy);
+    G.mine.push({ sx, sy, x: sx, y: sy, tx, ty, vx: (tx - sx) / d * speed, vy: (ty - sy) / d * speed, t: d / speed });
+    A.sfx.tone({ f: 900, f2: 1800, d: 0.15, type: 'sawtooth', v: 0.05 });
+  }
+
+  function boom(x, y, big) {
+    G.booms.push({ x, y, r: 0, t: 0, max: big ? 18 : 13 });
+    A.sfx.noise({ d: 0.5, v: 0.2, f: 1500, f2: 100 });
+  }
+
+  function destroyEnemy(e, i) {
+    G.enemies.splice(i, 1);
+    A.addScore(25 * mult());
+    boom(e.x, e.y, false);
+  }
+
+  function hitGround(e) {
+    boom(e.x, GROUND - 4, true);
+    const ci = CITIES.findIndex(x => Math.abs(x - e.x) < 12);
+    if (ci >= 0 && G.cities[ci]) { G.cities[ci] = false; A.sfx.noise({ d: 1.2, v: 0.5, f: 900, f2: 40 }); }
+    const bi = BASES.findIndex(x => Math.abs(x - e.x) < 14);
+    if (bi >= 0 && G.baseAlive[bi]) { G.baseAlive[bi] = false; G.ammo[bi] = 0; A.sfx.noise({ d: 1, v: 0.45, f: 700, f2: 40 }); }
+  }
+
+  A = Arcade.start({
+    id: 'shield', title: 'CITY SHIELD', subtitle: 'A TRIBUTE TO MISSILE COMMAND (1980)', color: '#f33',
+    width: W, height: H,
+    help: ['TAP OR CLICK TO FIRE', 'OR: ARROWS AIM, THEN', 'Z  X  C  FIRE LEFT/MID/RIGHT', '', 'DEFEND YOUR CITIES'],
+    keys: { fire: ['KeyZ', 'KeyA'], b: ['KeyX', 'KeyS', 'Space'], c: ['KeyC', 'KeyD'], left: ['ArrowLeft'], right: ['ArrowRight'], up: ['ArrowUp'], down: ['ArrowDown'] },
+    touch: false,
+    onPointer(x, y) { G.cx = x; G.cy = y; fire(null, x, y); },
+    onPointerMove(x, y, a, e) { if (e.pointerType === 'mouse') { G.cx = x; G.cy = y; } },
+    newGame(a) {
+      G = { wave: 0, cities: [true, true, true, true, true, true], bonusCities: 0, nextCity: 10000, cx: W / 2, cy: 120, t: 0 };
+      startWave();
+    },
+    update(a, dt) {
+      G.t += dt;
+      if (a.down('left')) G.cx -= 190 * dt;
+      if (a.down('right')) G.cx += 190 * dt;
+      if (a.down('up')) G.cy -= 190 * dt;
+      if (a.down('down')) G.cy += 190 * dt;
+      G.cx = Math.max(4, Math.min(W - 4, G.cx)); G.cy = Math.max(10, Math.min(GROUND - 14, G.cy));
+      if (a.pressed('fire')) fire(0, G.cx, G.cy);
+      if (a.pressed('b')) fire(1, G.cx, G.cy);
+      if (a.pressed('c')) fire(2, G.cx, G.cy);
+
+      if (G.banner > 0) { G.banner -= dt; return; }
+      if (G.summary) {
+        G.summary.t += dt;
+        const s = G.summary;
+        if (s.t > 0.12 && (s.ammoLeft > 0 || s.citiesLeft > 0)) {
+          s.t = 0;
+          if (s.ammoLeft > 0) { s.ammoLeft--; s.ammoShown++; a.addScore(5 * mult()); a.sfx.tone({ f: 1200, d: 0.04, v: 0.05 }); }
+          else { s.citiesLeft--; s.citiesShown++; a.addScore(100 * mult()); a.sfx.tone({ f: 600, d: 0.1, type: 'triangle', v: 0.08 }); }
+        } else if (s.ammoLeft === 0 && s.citiesLeft === 0 && s.t > 2) {
+          while (a.score >= G.nextCity) { G.bonusCities++; G.nextCity += 10000; }
+          if (!G.cities.includes(true) && G.bonusCities === 0) { a.gameOver(); return; }
+          startWave();
+        }
+        return;
+      }
+
+      // launch incoming
+      G.launchT -= dt;
+      if (G.launchT <= 0 && G.toLaunch > 0) {
+        const n = Math.min(G.toLaunch, A.randi(2, 4));
+        for (let i = 0; i < n; i++) launch(Math.random() * W, 0, A.pick(targets()) + A.rand(-4, 4));
+        G.toLaunch -= n;
+        G.launchT = Math.max(1.6, 5 - G.wave * 0.3) * A.rand(0.7, 1.2);
+      }
+      if (G.enemies.length === 0 && G.toLaunch > 0 && G.launchT > 1) G.launchT = 1;
+
+      // bombers / satellites
+      G.flyerT -= dt;
+      if (G.flyerT <= 0 && G.toLaunch > 0) {
+        const left = Math.random() < 0.5;
+        G.flyers.push({ x: left ? -10 : W + 10, y: 50 + Math.random() * 60, vx: left ? 30 : -30, sat: Math.random() < 0.5, dropT: 2 });
+        G.flyerT = 10 + Math.random() * 8;
+      }
+      for (let i = G.flyers.length - 1; i >= 0; i--) {
+        const f = G.flyers[i];
+        f.x += f.vx * dt; f.dropT -= dt;
+        if (f.dropT <= 0 && G.toLaunch > 0 && f.x > 10 && f.x < W - 10) { f.dropT = 2.5 + Math.random() * 2; launch(f.x, f.y, A.pick(targets())); G.toLaunch--; }
+        if (f.x < -20 || f.x > W + 20) G.flyers.splice(i, 1);
+      }
+
+      // enemy missiles
+      for (let i = G.enemies.length - 1; i >= 0; i--) {
+        const e = G.enemies[i];
+        e.x += e.vx * dt; e.y += e.vy * dt;
+        if (e.split && e.y > e.split) {
+          e.split = 0;
+          const n = A.randi(1, 2);
+          for (let k = 0; k < n && G.toLaunch >= 0; k++) { launch(e.x, e.y, A.pick(targets())); G.enemies[G.enemies.length - 1].sx = e.x; G.enemies[G.enemies.length - 1].sy = e.y; }
+        }
+        if (e.y >= GROUND - 2) { G.enemies.splice(i, 1); hitGround(e); }
+      }
+      // player missiles
+      for (let i = G.mine.length - 1; i >= 0; i--) {
+        const m = G.mine[i];
+        m.t -= dt;
+        if (m.t <= 0) { G.mine.splice(i, 1); boom(m.tx, m.ty, true); continue; }
+        m.x += m.vx * dt; m.y += m.vy * dt;
+      }
+      // explosions
+      for (let i = G.booms.length - 1; i >= 0; i--) {
+        const b = G.booms[i];
+        b.t += dt;
+        b.r = b.t < 0.6 ? b.max * b.t / 0.6 : b.t < 1.0 ? b.max : b.max * (1 - (b.t - 1.0) / 0.5);
+        if (b.t > 1.5) { G.booms.splice(i, 1); continue; }
+        for (let j = G.enemies.length - 1; j >= 0; j--) {
+          const e = G.enemies[j];
+          if (Math.hypot(e.x - b.x, e.y - b.y) < b.r) destroyEnemy(e, j);
+        }
+        for (let j = G.flyers.length - 1; j >= 0; j--) {
+          const f = G.flyers[j];
+          if (Math.hypot(f.x - b.x, f.y - b.y) < b.r + 4) { G.flyers.splice(j, 1); a.addScore(100 * mult()); boom(f.x, f.y, false); }
+        }
+      }
+
+      // wave over
+      if (G.toLaunch <= 0 && !G.enemies.length && !G.booms.length && !G.mine.length) {
+        G.flyers = [];
+        G.summary = { t: -0.8, ammoLeft: G.ammo.reduce((s, v) => s + v, 0), citiesLeft: G.cities.filter(Boolean).length, ammoShown: 0, citiesShown: 0 };
+      }
+    },
+    draw(a) {
+      const c = a.ctx, P = pal();
+      c.fillStyle = P.sky; c.fillRect(0, 0, W, H);
+      // ground and base mounds
+      c.fillStyle = P.ground;
+      c.fillRect(0, GROUND, W, H - GROUND);
+      for (const x of BASES) { c.beginPath(); c.moveTo(x - 20, GROUND); c.lineTo(x - 11, GROUND - 10); c.lineTo(x + 11, GROUND - 10); c.lineTo(x + 20, GROUND); c.fill(); }
+      for (const x of CITIES) { c.fillRect(x - 12, GROUND - 3, 24, 3); }
+      // ammo
+      c.fillStyle = '#35f';
+      BASES.forEach((x, i) => {
+        if (!G.baseAlive[i]) { a.text('X', x, GROUND - 17, 6, '#f33', 'center'); return; }
+        const rows = [[0], [-1, 1], [-2, 0, 2], [-3, -1, 1, 3]];
+        let n = G.ammo[i];
+        for (let r = 0; r < rows.length && n > 0; r++) for (const k of rows[r]) { if (n-- <= 0) break; c.fillRect(x + k * 3 - 1, GROUND - 16 + r * 3, 2, 2); }
+        if (G.ammo[i] === 0) a.text('OUT', x, GROUND - 17, 5, '#f33', 'center');
+        else if (G.ammo[i] <= 3) a.text('LOW', x, GROUND - 24, 5, '#f33', 'center');
+      });
+      // cities
+      CITIES.forEach((x, i) => {
+        if (!G.cities[i]) { c.fillStyle = '#633'; c.fillRect(x - 9, GROUND - 3, 18, 3); return; }
+        c.fillStyle = P.city;
+        const hs = [5, 9, 6, 11, 7, 10, 4];
+        hs.forEach((h, k) => c.fillRect(x - 10 + k * 3, GROUND - 3 - h, 3, h));
+        c.fillStyle = '#fff';
+        for (let k = 0; k < 6; k++) c.fillRect(x - 9 + k * 3, GROUND - 7 - (k % 3) * 2, 1, 1);
+      });
+      // trails
+      c.lineWidth = 1;
+      c.strokeStyle = P.enemy;
+      for (const e of G.enemies) { c.beginPath(); c.moveTo(e.sx, e.sy); c.lineTo(e.x, e.y); c.stroke(); c.fillStyle = '#fff'; c.fillRect(e.x - 1, e.y - 1, 2, 2); }
+      c.strokeStyle = P.mine;
+      for (const m of G.mine) {
+        c.beginPath(); c.moveTo(m.sx, m.sy); c.lineTo(m.x, m.y); c.stroke(); c.fillStyle = '#fff'; c.fillRect(m.x - 1, m.y - 1, 2, 2);
+        c.strokeStyle = '#fff'; c.beginPath(); c.moveTo(m.tx - 2, m.ty - 2); c.lineTo(m.tx + 2, m.ty + 2); c.moveTo(m.tx + 2, m.ty - 2); c.lineTo(m.tx - 2, m.ty + 2); c.stroke(); c.strokeStyle = P.mine;
+      }
+      for (const f of G.flyers) {
+        c.fillStyle = f.sat ? '#fff' : '#3f3';
+        if (f.sat) { c.fillRect(f.x - 3, f.y - 3, 6, 6); c.fillStyle = '#39f'; c.fillRect(f.x - 8, f.y - 1, 16, 2); }
+        else { c.fillRect(f.x - 7, f.y - 1, 14, 3); c.fillRect(f.x - 2, f.y - 4, 6, 2); c.fillRect(f.x - 7 * Math.sign(f.vx), f.y - 4, 2, 4); }
+      }
+      // explosions
+      const flash = ['#fff', '#ff3', '#f3c', '#3ff', '#f33', '#3f3'];
+      for (const b of G.booms) { c.fillStyle = flash[Math.floor(G.t * 20 + b.x) % flash.length]; c.beginPath(); c.arc(b.x, b.y, Math.max(0, b.r), 0, 7); c.fill(); }
+      // crosshair
+      c.strokeStyle = '#fff'; c.beginPath();
+      c.moveTo(G.cx - 5, G.cy); c.lineTo(G.cx - 2, G.cy); c.moveTo(G.cx + 2, G.cy); c.lineTo(G.cx + 5, G.cy);
+      c.moveTo(G.cx, G.cy - 5); c.lineTo(G.cx, G.cy - 2); c.moveTo(G.cx, G.cy + 2); c.lineTo(G.cx, G.cy + 5); c.stroke();
+      // HUD
+      a.text(String(a.score), 60, 4, 8, P.enemy, 'right');
+      a.text('HI ' + a.hi, W - 6, 4, 6, '#888', 'right');
+      a.text(mult() + ' X POINTS', W / 2, 4, 6, '#39f', 'center');
+      if (G.banner > 0) {
+        a.text('WAVE ' + G.wave, W / 2, 90, 10, '#fff', 'center');
+        a.text('DEFEND CITIES', W / 2, 110, 8, P.enemy, 'center');
+        a.text(mult() + ' X POINTS', W / 2, 126, 8, '#39f', 'center');
+      }
+      if (G.summary) {
+        const s = G.summary;
+        a.text('BONUS POINTS', W / 2, 70, 8, '#39f', 'center');
+        a.text(String(s.ammoShown * 5 * mult()), 110, 94, 8, P.enemy, 'right');
+        c.fillStyle = '#35f'; for (let k = 0; k < s.ammoShown; k++) c.fillRect(120 + k * 4, 96, 2, 4);
+        a.text(String(s.citiesShown * 100 * mult()), 110, 114, 8, P.enemy, 'right');
+        c.fillStyle = P.city; for (let k = 0; k < s.citiesShown; k++) c.fillRect(120 + k * 14, 113, 10, 8);
+      }
+    },
+  });
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

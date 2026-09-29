@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bug Blaster</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 240, H = 256, T = 8, COLS = 30, ROWS = 32;
+  const ZONE = 24;                 // first row of the player zone
+  const PALS = [
+    { mush: '#f33', stem: '#3cf', body: '#3f3', head: '#f3f', player: '#fff' },
+    { mush: '#3cf', stem: '#ff3', body: '#f3f', head: '#3f3', player: '#ff3' },
+    { mush: '#ff3', stem: '#f3f', body: '#3cf', head: '#f33', player: '#3f3' },
+    { mush: '#f3f', stem: '#3f3', body: '#ff3', head: '#3cf', player: '#3cf' },
+    { mush: '#3f3', stem: '#f33', body: '#fff', head: '#ff3', player: '#f3f' },
+  ];
+  let G, A;
+  const pal = () => PALS[(G.wave - 1) % PALS.length];
+
+  function mushAt(c, r) { return G.mush[r] && G.mush[r][c]; }
+  function setMush(c, r, m) { if (r >= 1 && r < ROWS && c >= 0 && c < COLS) G.mush[r][c] = m; }
+
+  function seedMushrooms() {
+    G.mush = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+    for (let i = 0; i < 42; i++) {
+      const c = A.randi(0, COLS - 1), r = A.randi(2, ROWS - 3);
+      setMush(c, r, { hp: 4, poison: false });
+    }
+  }
+
+  function spawnCentipede() {
+    G.segs = [];
+    const n = 12;
+    const heads = Math.min(G.wave - 1, 6);   // extra lone heads in later waves
+    const speed = G.wave > 4 ? 2 : 1;
+    let prev = null;
+    for (let i = 0; i < n - heads; i++) {
+      const s = { x: 112 - i * T * 1, row: 1, dir: 1, vdir: 1, head: i === 0, next: null, speed, plunge: false };
+      s.x = 112 + i * T * -1;
+      if (prev) prev.next = s;
+      prev = s;
+      G.segs.push(s);
+    }
+    // stagger the train so it enters in a line
+    G.segs.forEach((s, i) => { s.x = 112 - i * T; });
+    for (let h = 0; h < heads; h++) G.segs.push({ x: A.randi(1, COLS - 2) * T, row: 1, dir: Math.random() < 0.5 ? 1 : -1, vdir: 1, head: true, next: null, speed, plunge: false });
+  }
+
+  function resetPlayer() {
+    G.p = { x: 116, y: 240, dead: 0 };
+    G.bullet = null;
+  }
+
+  function moveSeg(s) {
+    for (let step = 0; step < s.speed; step++) {
+      if (s.x % T === 0) {
+        const col = s.x / T;
+        const m = mushAt(col, s.row);
+        if (m && m.poison && !s.plunge) s.plunge = true;
+        if (s.plunge) {
+          if (s.row >= ROWS - 1) { s.plunge = false; s.vdir = -1; }
+          else { s.row++; return; }
+        }
+        const nc = col + s.dir;
+        const blocked = nc < 0 || nc >= COLS || mushAt(nc, s.row);
+        if (blocked) {
+          let nr = s.row + s.vdir;
+          if (nr >= ROWS) { s.vdir = -1; nr = s.row - 1; }
+          if (nr < ZONE && s.vdir === -1 && s.row >= ZONE) { s.vdir = 1; nr = s.row + 1; }
+          s.row = Math.max(1, Math.min(ROWS - 1, nr));
+          s.dir = -s.dir;
+          return;
+        }
+      }
+      s.x += s.dir;
+    }
+  }
+
+  function killSeg(s) {
+    const i = G.segs.indexOf(s);
+    if (i < 0) return;
+    G.segs.splice(i, 1);
+    A.addScore(s.head ? 100 : 10);
+    const col = Math.round(s.x / T);
+    setMush(Math.max(0, Math.min(COLS - 1, col)), s.row, { hp: 4, poison: false });
+    if (s.next) s.next.head = true;
+    for (const o of G.segs) if (o.next === s) o.next = null;
+    boom(s.x + 4, s.row * T + 4, [pal().body, '#fff']);
+    A.sfx.noise({ d: 0.15, v: 0.25, f: 3000, f2: 400 });
+  }
+
+  function boom(x, y, cols) {
+    for (let i = 0; i < 8; i++) { const a = Math.random() * 6.28, sp = 20 + Math.random() * 50; G.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.3 + Math.random() * 0.2, c: A.pick(cols) }); }
+  }
+
+  function playerDies() {
+    G.p.dead = 2.5;
+    G.lives--;
+    boom(G.p.x + 4, G.p.y + 4, ['#fff', pal().player, '#f33']);
+    boom(G.p.x + 4, G.p.y + 4, ['#fff', pal().player, '#f33']);
+    A.sfx.noise({ d: 1, v: 0.45, f: 1500, f2: 60 });
+    G.spider = null; G.flea = null; G.scorpion = null;
+  }
+
+  function overlap(ax, ay, aw, ah, bx, by, bw, bh) { return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by; }
+
+  A = Arcade.start({
+    id: 'bugs', title: 'BUG BLASTER', subtitle: 'A TRIBUTE TO CENTIPEDE (1981)', color: '#3f3',
+    width: W, height: H,
+    help: ['ARROWS MOVE', 'HOLD SPACE TO FIRE', '', 'BLAST THE CENTIPEDE', 'WATCH FOR THE SPIDER'],
+    touch: { dpad: '4', buttons: [{ act: 'fire', label: 'FIRE' }] },
+    newGame(a) {
+      G = { wave: 1, lives: 3, parts: [], nextLife: 12000, t: 0, spider: null, spiderT: 5, flea: null, scorpion: null, scorpT: 15, restoring: 0 };
+      seedMushrooms();
+      spawnCentipede();
+      resetPlayer();
+    },
+    update(a, dt) {
+      G.t += dt;
+      const p = G.p;
+      for (let i = G.parts.length - 1; i >= 0; i--) { const q = G.parts[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) G.parts.splice(i, 1); }
+
+      if (p.dead > 0) {
+        p.dead -= dt;
+        // repair damaged mushrooms, 5 points each, like the original
+        if (p.dead < 1.8 && Math.floor(p.dead * 20) !== Math.floor((p.dead + dt) * 20)) {
+          outer: for (let r = 1; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+            const m = G.mush[r][c];
+            if (m && (m.hp < 4 || m.poison)) { m.hp = 4; m.poison = false; a.addScore(5); a.sfx.tone({ f: 800, d: 0.03, v: 0.05 }); break outer; }
+          }
+        }
+        if (p.dead <= 0) {
+          if (G.lives <= 0) { a.gameOver(); return; }
+          resetPlayer();
+          // restart the centipede from the top with the same number of segments
+          const n = G.segs.length;
+          spawnCentipede();
+          G.segs = G.segs.slice(0, Math.max(1, n));
+          G.segs[G.segs.length - 1].next = null;
+        }
+        return;
+      }
+
+      // player movement, blocked by mushrooms
+      const sp = 95 * dt;
+      const tryMove = (dx, dy) => {
+        const nx = Math.max(0, Math.min(W - 8, p.x + dx)), ny = Math.max(ZONE * T, Math.min(H - 8, p.y + dy));
+        const c0 = Math.floor((nx + 1) / T), c1 = Math.floor((nx + 6) / T), r0 = Math.floor((ny + 1) / T), r1 = Math.floor((ny + 6) / T);
+        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (mushAt(c, r)) return;
+        p.x = nx; p.y = ny;
+      };
+      if (a.down('left')) tryMove(-sp, 0);
+      if (a.down('right')) tryMove(sp, 0);
+      if (a.down('up')) tryMove(0, -sp);
+      if (a.down('down')) tryMove(0, sp);
+      if (a.down('fire') && !G.bullet) { G.bullet = { x: p.x + 4, y: p.y }; a.sfx.tone({ f: 1500, f2: 900, d: 0.04, type: 'square', v: 0.035 }); }
+
+      // bullet (fast, checked in small steps)
+      if (G.bullet) {
+        const b = G.bullet;
+        let gone = false;
+        for (let k = 0; k < 6 && !gone; k++) {
+          b.y -= 400 * dt / 6;
+          if (b.y < 8) { gone = true; break; }
+          const c = Math.floor(b.x / T), r = Math.floor(b.y / T);
+          const m = mushAt(c, r);
+          if (m) { m.hp--; if (m.hp <= 0) { G.mush[r][c] = null; a.addScore(1); } gone = true; a.sfx.tone({ f: 300, d: 0.03, v: 0.04 }); break; }
+          for (const s of G.segs) if (overlap(b.x - 1, b.y, 2, 4, s.x, s.row * T, 8, 8)) { killSeg(s); gone = true; break; }
+          if (gone) break;
+          if (G.spider && overlap(b.x - 1, b.y, 2, 4, G.spider.x - 7, G.spider.y - 4, 14, 8)) {
+            const d = Math.abs(G.spider.y - p.y);
+            const pts = d < 16 ? 900 : d < 40 ? 600 : 300;
+            a.addScore(pts); G.pop = { x: G.spider.x, y: G.spider.y, s: String(pts), t: 1 };
+            boom(G.spider.x, G.spider.y, ['#f3f', '#fff']); G.spider = null; gone = true; G.spiderT = 3 + Math.random() * 4;
+            a.sfx.noise({ d: 0.3, v: 0.3, f: 2000, f2: 200 }); break;
+          }
+          if (G.flea && overlap(b.x - 1, b.y, 2, 4, G.flea.x - 4, G.flea.y - 4, 8, 8)) {
+            G.flea.hp--; gone = true;
+            if (G.flea.hp <= 0) { a.addScore(200); boom(G.flea.x, G.flea.y, ['#fff', '#ff3']); G.flea = null; }
+            else G.flea.vy *= 2;
+            break;
+          }
+          if (G.scorpion && overlap(b.x - 1, b.y, 2, 4, G.scorpion.x - 8, G.scorpion.y - 4, 16, 8)) {
+            a.addScore(1000); G.pop = { x: G.scorpion.x, y: G.scorpion.y, s: '1000', t: 1 };
+            boom(G.scorpion.x, G.scorpion.y, ['#3cf', '#fff']); G.scorpion = null; gone = true; break;
+          }
+        }
+        if (gone) G.bullet = null;
+      }
+
+      // centipede
+      for (const s of G.segs) moveSeg(s);
+      for (const s of G.segs) if (overlap(p.x + 1, p.y + 1, 6, 6, s.x + 1, s.row * T + 1, 6, 6)) { playerDies(); return; }
+      if (Math.floor(G.t * 7) !== Math.floor((G.t - dt) * 7) && G.segs.length) a.sfx.tone({ f: 180 + (G.segs.length % 3) * 20, d: 0.06, type: 'triangle', v: 0.06 });
+
+      // spider
+      if (!G.spider) {
+        G.spiderT -= dt;
+        if (G.spiderT <= 0) { const left = Math.random() < 0.5; G.spider = { x: left ? -8 : W + 8, y: ZONE * T + 10, vx: (left ? 1 : -1) * (40 + G.wave * 3), vy: 60, t: 0 }; }
+      } else {
+        const s = G.spider;
+        s.t += dt;
+        s.x += s.vx * dt * (Math.random() < 0.15 ? 0 : 1);
+        s.y += s.vy * dt;
+        if (s.y > H - 6) { s.y = H - 6; s.vy = -A.rand(40, 90); }
+        if (s.y < ZONE * T - 16) { s.y = ZONE * T - 16; s.vy = A.rand(40, 90); }
+        if (Math.random() < dt * 1.2) s.vy = -s.vy;
+        const c = Math.floor(s.x / T), r = Math.floor(s.y / T);
+        if (mushAt(c, r) && Math.random() < dt * 4) G.mush[r][c] = null;
+        if (s.x < -16 || s.x > W + 16) { G.spider = null; G.spiderT = 2 + Math.random() * 4; }
+        else if (overlap(p.x + 1, p.y + 1, 6, 6, s.x - 6, s.y - 3, 12, 6)) { playerDies(); return; }
+        if (Math.floor(s.t * 6) !== Math.floor((s.t - dt) * 6)) a.sfx.tone({ f: 900, f2: 700, d: 0.05, v: 0.03 });
+      }
+
+      // flea: drops when the player zone is thin on mushrooms
+      if (!G.flea && G.wave >= 2) {
+        let n = 0;
+        for (let r = ZONE; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (G.mush[r][c]) n++;
+        if (n < 5 && Math.random() < dt * 0.5) G.flea = { x: A.randi(0, COLS - 1) * T + 4, y: 8, vy: 110, hp: 2 };
+      }
+      if (G.flea) {
+        const f = G.flea;
+        const pr = Math.floor(f.y / T);
+        f.y += f.vy * dt;
+        const r = Math.floor(f.y / T);
+        if (r !== pr && r < ROWS - 1 && Math.random() < 0.25 && !mushAt(Math.floor(f.x / T), r)) setMush(Math.floor(f.x / T), r, { hp: 4, poison: false });
+        if (f.y > H + 8) G.flea = null;
+        else if (overlap(p.x + 1, p.y + 1, 6, 6, f.x - 3, f.y - 3, 6, 6)) { playerDies(); return; }
+      }
+
+      // scorpion: poisons mushrooms it crosses
+      if (!G.scorpion && G.wave >= 3) {
+        G.scorpT -= dt;
+        if (G.scorpT <= 0) { G.scorpT = 15 + Math.random() * 10; const left = Math.random() < 0.5; G.scorpion = { x: left ? -10 : W + 10, y: A.randi(3, 14) * T + 4, vx: left ? 35 : -35 }; }
+      }
+      if (G.scorpion) {
+        const s = G.scorpion;
+        s.x += s.vx * dt;
+        const m = mushAt(Math.floor(s.x / T), Math.floor(s.y / T));
+        if (m) m.poison = true;
+        if (s.x < -20 || s.x > W + 20) G.scorpion = null;
+      }
+
+      if (G.pop) { G.pop.t -= dt; if (G.pop.t <= 0) G.pop = null; }
+      if (a.score >= G.nextLife) { G.nextLife += 12000; G.lives++; a.sfx.tune([[880, .08], [1320, .12]], { v: .1 }); }
+
+      // wave cleared
+      if (!G.segs.length) {
+        G.wave++;
+        spawnCentipede();
+        a.sfx.tune([[523, .08], [659, .08], [784, .08], [1047, .16]], { v: .08 });
+      }
+    },
+    draw(a) {
+      const c = a.ctx, P = pal();
+      // mushrooms
+      for (let r = 1; r < ROWS; r++) for (let col = 0; col < COLS; col++) {
+        const m = G.mush[r][col];
+        if (!m) continue;
+        const x = col * T, y = r * T, h = m.hp;
+        c.fillStyle = m.poison ? '#fff' : P.mush;
+        c.fillRect(x + 1, y + 1, 6, 1 + h);
+        c.fillRect(x, y + 2, 8, Math.max(1, h - 1));
+        if (h > 1) { c.fillStyle = m.poison ? P.mush : P.stem; c.fillRect(x + 3, y + 2 + h, 2, Math.min(3, 7 - (2 + h))); }
+      }
+      // centipede
+      for (const s of G.segs) {
+        const x = s.x, y = s.row * T;
+        c.fillStyle = s.head ? P.head : P.body;
+        c.beginPath(); c.arc(x + 4, y + 4, 3.6, 0, 7); c.fill();
+        c.fillStyle = s.head ? P.body : P.head;
+        const lg = Math.floor(G.t * 10 + x / 4) % 2;
+        c.fillRect(x + 1, y + (lg ? 7 : 6), 1, 1); c.fillRect(x + 6, y + (lg ? 6 : 7), 1, 1);
+        if (s.head) { c.fillStyle = '#000'; c.fillRect(x + (s.dir > 0 ? 5 : 1), y + 3, 2, 2); }
+      }
+      // spider, flea, scorpion
+      if (G.spider) {
+        const s = G.spider, lg = Math.floor(G.t * 12) % 2;
+        c.fillStyle = '#f3f'; c.fillRect(s.x - 3, s.y - 2, 6, 5);
+        c.fillStyle = '#3cf';
+        for (const k of [-1, 1]) { c.fillRect(s.x + k * 4 - (k < 0 ? 2 : 0), s.y - 3 + lg, 3, 1); c.fillRect(s.x + k * 6 - (k < 0 ? 1 : 0), s.y - 2 + lg, 2, 4); c.fillRect(s.x + k * 4 - (k < 0 ? 2 : 0), s.y + 2 - lg, 3, 1); }
+        c.fillStyle = '#f33'; c.fillRect(s.x - 1, s.y - 1, 1, 1); c.fillRect(s.x + 1, s.y - 1, 1, 1);
+      }
+      if (G.flea) { const f = G.flea; c.fillStyle = '#ff3'; c.fillRect(f.x - 2, f.y - 4, 4, 6); c.fillStyle = '#fff'; c.fillRect(f.x - 3, f.y + 2, 1, 2); c.fillRect(f.x + 2, f.y + 2, 1, 2); }
+      if (G.scorpion) { const s = G.scorpion, d = Math.sign(s.vx); c.fillStyle = '#3cf'; c.fillRect(s.x - 5, s.y - 1, 10, 4); c.fillRect(s.x - 6 * d, s.y - 5, 2, 5); c.fillRect(s.x - 5 * d, s.y - 5, 3, 1); c.fillStyle = '#f33'; c.fillRect(s.x + 5 * d - 1, s.y, 3, 2); }
+      // player
+      const p = G.p;
+      if (p.dead <= 0) {
+        c.fillStyle = P.player; c.fillRect(p.x + 2, p.y + 2, 4, 6); c.fillRect(p.x + 3, p.y, 2, 2);
+        c.fillStyle = P.head; c.fillRect(p.x + 1, p.y + 5, 6, 2);
+      }
+      if (G.bullet) { c.fillStyle = '#fff'; c.fillRect(G.bullet.x - 0.5, G.bullet.y, 1, 5); }
+      for (const q of G.parts) { c.fillStyle = q.c; c.fillRect(q.x, q.y, 2, 2); }
+      if (G.pop) a.text(G.pop.s, G.pop.x, G.pop.y - 8, 6, '#fff', 'center');
+      // HUD
+      c.fillStyle = '#000'; c.fillRect(0, 0, W, 8);
+      a.text(String(a.score), 8, 0, 8, P.mush);
+      a.text(String(a.hi), W / 2 + 16, 0, 8, '#aaa', 'center');
+      for (let i = 0; i < Math.min(G.lives - 1, 6); i++) { c.fillStyle = P.player; c.fillRect(56 + i * 7, 2, 3, 5); }
+      a.text('W' + G.wave, W - 4, 0, 8, P.head, 'right');
+    },
+  });
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

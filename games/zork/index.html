@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zork I</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">
+<style>
+  html, body { overflow: hidden; touch-action: manipulation; -webkit-user-select: text; user-select: text; }
+  .term {
+    position: fixed; top: 38px; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    max-width: 900px; margin: 0 auto;
+    padding: 8px 12px 10px;
+  }
+  .crt {
+    flex: 1; display: flex; flex-direction: column; min-height: 0;
+    background: radial-gradient(ellipse at center, #06170b 0%, #020a04 100%);
+    border-radius: 10px;
+    box-shadow: 0 0 0 4px #16131f, 0 0 30px rgba(51, 255, 102, 0.15), inset 0 0 60px rgba(0,0,0,0.7);
+    position: relative; overflow: hidden;
+  }
+  .crt::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.22) 2px 3px);
+  }
+  .status {
+    display: flex; justify-content: space-between; gap: 12px;
+    background: #33ff66; color: #021; padding: 3px 12px;
+    font-family: "VT323", monospace; font-size: 22px; line-height: 1.1;
+  }
+  .status span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status span:last-child { white-space: nowrap; }
+  #out {
+    flex: 1; overflow-y: auto; padding: 10px 14px 4px;
+    font-family: "VT323", monospace; font-size: 22px; line-height: 1.2;
+    color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,0.6);
+    white-space: pre-wrap; word-wrap: break-word;
+    -webkit-overflow-scrolling: touch;
+  }
+  #out .cmd { color: #bfffcf; }
+  .inrow { display: flex; align-items: center; padding: 4px 14px 10px; font-family: "VT323", monospace; font-size: 22px; color: #33ff66; }
+  .inrow span { margin-right: 6px; text-shadow: 0 0 4px rgba(51,255,102,0.6); }
+  #cmd {
+    flex: 1; background: transparent; border: 0; outline: 0; color: #bfffcf;
+    font: inherit; caret-color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,0.6);
+    min-width: 0;
+  }
+  .keys { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 8px; justify-content: center; }
+  .keys button {
+    font-family: "Press Start 2P", monospace; font-size: 9px;
+    color: #bfffcf; background: #0b2413; border: 2px solid #1d5a31; border-radius: 5px;
+    padding: 9px 8px; min-width: 42px; cursor: pointer;
+  }
+  .keys button:hover, .keys button:focus-visible { border-color: #33ff66; outline: none; }
+  .credit { font-family: "VT323", monospace; font-size: 15px; color: #5c8a68; text-align: center; padding-top: 6px; }
+  .credit a { color: #7fbf8f; }
+  @media (max-width: 600px) {
+    #out, .inrow, .status { font-size: 19px; }
+    .keys button { padding: 8px 6px; min-width: 36px; }
+  }
+</style>
+</head>
+<body>
+<div class="arc-bar">
+  <a class="arc-btn" href="../../index.html" aria-label="Back to the arcade">&#9664; ARCADE</a>
+  <span class="arc-name">ZORK I</span>
+  <button class="arc-btn" id="newgame" aria-label="Start a new game">NEW GAME</button>
+</div>
+<div class="term">
+  <div class="crt">
+    <div class="status"><span id="loc">&nbsp;</span><span id="score"></span></div>
+    <div id="out" aria-live="polite"></div>
+    <form class="inrow" id="form" autocomplete="off">
+      <span>&gt;</span>
+      <input id="cmd" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Command">
+    </form>
+  </div>
+  <div class="keys" id="keys"></div>
+  <div class="credit">Zork I &copy; Infocom. Released under the MIT license by Microsoft, 2025 &middot; <a href="https://github.com/historicalsource/zork1" target="_blank" rel="noopener">source</a> &middot; Z-machine interpreter written for this site</div>
+</div>
+<script src="zmachine.js"></script>
+<script>
+(function () {
+  const out = document.getElementById('out');
+  const cmd = document.getElementById('cmd');
+  const AUTO = 'zork1.autosave', SLOT = 'zork1.save';
+  const MAX_LOG = 40000;
+  let log = '';
+  let zm;
+  const history = []; let hIdx = 0;
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } },
+    del(k) { try { localStorage.removeItem(k); } catch (e) { /* storage blocked */ } },
+  };
+
+  // The game prints its own ">" prompt; the input row already shows one, so drop it.
+  function stripPrompt() {
+    if (!log.endsWith('>')) return;
+    log = log.slice(0, -1);
+    const last = out.lastChild;
+    if (last && last.nodeType === 3 && last.nodeValue.endsWith('>')) last.nodeValue = last.nodeValue.slice(0, -1);
+  }
+
+  function write(s, cls, nolog) {
+    if (cls) {
+      const el = document.createElement('span');
+      el.className = cls; el.textContent = s;
+      out.appendChild(el);
+    } else out.appendChild(document.createTextNode(s));
+    if (nolog) { out.scrollTop = out.scrollHeight; return; }
+    log += s;
+    if (log.length > MAX_LOG) log = log.slice(-MAX_LOG);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  const io = {
+    print: s => write(s),
+    readLine: () => { stripPrompt(); autosave(); },
+    status: (loc, right) => {
+      document.getElementById('loc').textContent = loc || ' ';
+      document.getElementById('score').textContent = right;
+    },
+    save: snap => store.set(SLOT, JSON.stringify(snap)),
+    restore: () => { const s = store.get(SLOT); return s ? JSON.parse(s) : null; },
+    restarted: () => { out.textContent = ''; log = ''; },
+    quit: () => { store.del(AUTO); write('\n\n[The game has ended. Tap NEW GAME to play again.]\n'); },
+  };
+
+  function autosave() {
+    if (!zm || !zm.waiting) return;
+    const snap = zm.snapshot();
+    snap.waiting = zm.waiting;
+    snap.log = log;
+    store.set(AUTO, JSON.stringify(snap));
+  }
+
+  function submit(text) {
+    if (!zm || !zm.waiting) return;
+    text = text.trim();
+    write('>' + text + '\n', 'cmd');
+    if (text) { history.push(text); if (history.length > 100) history.shift(); }
+    hIdx = history.length;
+    zm.input(text);
+  }
+
+  document.getElementById('form').addEventListener('submit', e => {
+    e.preventDefault();
+    const t = cmd.value; cmd.value = '';
+    submit(t);
+  });
+  cmd.addEventListener('keydown', e => {
+    if (e.key === 'ArrowUp') { if (hIdx > 0) { hIdx--; cmd.value = history[hIdx]; } e.preventDefault(); }
+    else if (e.key === 'ArrowDown') { if (hIdx < history.length) { hIdx++; cmd.value = history[hIdx] || ''; } e.preventDefault(); }
+  });
+  out.addEventListener('click', () => { if (!window.getSelection().toString()) cmd.focus({ preventScroll: true }); });
+
+  const KEYS = [['N', 'north'], ['S', 'south'], ['E', 'east'], ['W', 'west'], ['NE', 'northeast'], ['NW', 'northwest'], ['SE', 'southeast'], ['SW', 'southwest'], ['UP', 'up'], ['DOWN', 'down'],
+    ['LOOK', 'look'], ['INV', 'inventory'], ['TAKE ALL', 'take all'], ['WAIT', 'wait'], ['AGAIN', 'again'], ['SAVE', 'save'], ['RESTORE', 'restore']];
+  const keys = document.getElementById('keys');
+  for (const [label, c] of KEYS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label;
+    b.addEventListener('click', () => submit(c));
+    keys.appendChild(b);
+  }
+
+  document.getElementById('newgame').addEventListener('click', () => {
+    if (!zm) return;
+    if (!confirm('Start a new game? Your autosaved progress will be replaced (a SAVE slot you made is kept).')) return;
+    store.del(AUTO);
+    out.textContent = ''; log = '';
+    zm.reset();
+    zm.run();
+    cmd.focus({ preventScroll: true });
+  });
+
+  fetch('zork1.z3').then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.arrayBuffer();
+  }).then(buf => {
+    zm = new ZMachine(new Uint8Array(buf), io);
+    const saved = store.get(AUTO);
+    let resumed = false;
+    if (saved) {
+      try {
+        const s = JSON.parse(saved);
+        zm.load(s);
+        zm.waiting = s.waiting;
+        log = s.log || '';
+        out.textContent = log;
+        write('[Welcome back. Your game was saved automatically. Tap NEW GAME to start over.]\n\n', 'cmd', true);
+        zm.statusLine();
+        resumed = true;
+      } catch (e) { store.del(AUTO); zm.reset(); }
+    }
+    if (!resumed) zm.run();
+    out.scrollTop = out.scrollHeight;
+    if (!matchMedia('(pointer: coarse)').matches) cmd.focus({ preventScroll: true });
+  }).catch(e => write('Could not load the game file (' + e.message + ').\n'));
+
+  window.__zm = () => zm;
+})();
+</script>
+</body>
+</html>

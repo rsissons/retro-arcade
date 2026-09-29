@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Planet Guardian</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 320, H = 240;
+  const WW = 2560;               // world width (wraps)
+  const TOP = 34, GROUND = 226;  // playfield vertical limits
+  const PAL = { W: '#fff', R: '#f22', G: '#2e2', Y: '#fe2', P: '#c3f', M: '#f3c', B: '#39f', O: '#f90', C: '#0ff', g: '#8a8', D: '#777' };
+  const S = Arcade.sprite;
+  const IMG = {
+    ship: S([
+      '..WW..........',
+      '.WWWW.........',
+      'RWWWWWWWWWW...',
+      'WWWWWWWWWWWWWW',
+      'PPWWWWWWWWW...',
+      '..............'], PAL),
+    lander: [S([
+      '...GGG...',
+      '..GYGYG..',
+      '.GGGGGGG.',
+      '..G.G.G..',
+      '.G..G..G.',
+      'Y...Y...Y'], PAL), S([
+      '...GGG...',
+      '..GGYGG..',
+      '.GGGGGGG.',
+      '..G.G.G..',
+      '.G..G..G.',
+      'Y...Y...Y'], PAL)],
+    mutant: [S([
+      '.P.P.P.',
+      'PGPGPGP',
+      '.PPPPP.',
+      'P.P.P.P',
+      '.P...P.'], PAL), S([
+      'P.P.P.P',
+      'PGPGPGP',
+      '.PPPPP.',
+      '.P.P.P.',
+      'P.....P'], PAL)],
+    bomber: [S([
+      'BBBBBB',
+      'BYBBYB',
+      'BBBBBB',
+      'BYBBYB',
+      'BBBBBB'], PAL)],
+    pod: [S([
+      '..M.M..',
+      '.MRMRM.',
+      'MRMMMRM',
+      '.MRMRM.',
+      '..M.M..'], PAL)],
+    swarmer: [S([
+      '.R.',
+      'RYR',
+      '.R.'], PAL)],
+    baiter: [S([
+      '..GGGGGG..',
+      'GGYGGYGGYG',
+      '..GGGGGG..'], PAL)],
+    human: [S([
+      '.O.',
+      'MMM',
+      '.M.',
+      'B.B'], PAL), S([
+      '.O.',
+      'MMM',
+      '.M.',
+      '.B.'], PAL)],
+  };
+  const INFO = {
+    lander: { pts: 150, img: IMG.lander, r: 5 },
+    mutant: { pts: 150, img: IMG.mutant, r: 5 },
+    bomber: { pts: 250, img: IMG.bomber, r: 4 },
+    pod: { pts: 1000, img: IMG.pod, r: 4 },
+    swarmer: { pts: 150, img: IMG.swarmer, r: 3 },
+    baiter: { pts: 200, img: IMG.baiter, r: 5 },
+  };
+  let G, A;
+
+  const wrapX = x => ((x % WW) + WW) % WW;
+  const dxw = (from, to) => { let d = wrapX(to - from); if (d > WW / 2) d -= WW; return d; };
+  const sx = x => dxw(G.cam, x);   // world x -> screen x (may be off screen)
+
+  function makeTerrain() {
+    const t = [];
+    let y = 214, v = 0;
+    for (let x = 0; x < WW; x += 4) {
+      v += (Math.random() - 0.5) * 1.6; v *= 0.93;
+      y += v; if (y < 196) { y = 196; v = Math.abs(v); } if (y > 228) { y = 228; v = -Math.abs(v); }
+      t.push(y);
+    }
+    // smooth the seam
+    for (let i = 0; i < 12; i++) t[t.length - 1 - i] = t[t.length - 1 - i] + (t[0] - t[t.length - 1 - i]) * (1 - i / 12);
+    return t;
+  }
+  const groundAt = x => G.planetDead ? H + 20 : G.terrain[Math.floor(wrapX(x) / 4)];
+
+  function spawnEnemy(kind, x, y) {
+    const e = { kind, x: wrapX(x), y, vx: 0, vy: 0, t: Math.random() * 3, fireT: 1 + Math.random() * 3, state: 'seek', target: null };
+    if (kind === 'lander') { e.vx = (Math.random() < 0.5 ? -1 : 1) * 30; e.y = TOP + 10; }
+    if (kind === 'bomber') { e.vx = (Math.random() < 0.5 ? -1 : 1) * 25; e.vy = 15; }
+    if (kind === 'pod') { e.vx = (Math.random() < 0.5 ? -1 : 1) * 20; e.vy = (Math.random() - 0.5) * 30; }
+    G.enemies.push(e);
+    return e;
+  }
+
+  function startWave() {
+    G.wave++;
+    if (G.wave % 5 === 1) {
+      G.planetDead = false;
+      G.terrain = makeTerrain();
+      G.humans = [];
+      for (let i = 0; i < 10; i++) { const x = Math.random() * WW; G.humans.push({ x, y: 0, state: 'walk', vx: (Math.random() < 0.5 ? -1 : 1) * 4, vy: 0, carrier: null, fallFrom: 0 }); }
+      for (const h of G.humans) h.y = groundAt(h.x) - 2;
+    }
+    G.enemies = [];
+    G.shots = []; G.mines = [];
+    G.landersLeft = 15 + Math.min(G.wave, 5) * 1;
+    G.batchT = 1;
+    G.waveT = 0;
+    G.banner = 2.5;
+    const nb = Math.min(2 + Math.floor(G.wave / 2), 5), np = Math.min(1 + Math.floor(G.wave / 3), 4);
+    for (let i = 0; i < nb; i++) spawnEnemy('bomber', G.ship.x + 500 + Math.random() * (WW - 1000), 60 + Math.random() * 100);
+    for (let i = 0; i < np; i++) spawnEnemy('pod', G.ship.x + 500 + Math.random() * (WW - 1000), 60 + Math.random() * 100);
+  }
+
+  function resetShip() {
+    G.ship = { x: G.ship ? G.ship.x : 200, y: 120, vx: 0, face: 1, dead: false, inv: 1.5, carry: null };
+    G.cam = wrapX(G.ship.x - 80);
+  }
+
+  function explode(x, y, cols, n) {
+    for (let i = 0; i < (n || 16); i++) {
+      const a = Math.random() * 6.28, s = 20 + Math.random() * 90;
+      G.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.5, c: A.pick(cols) });
+    }
+  }
+
+  function killEnemy(e, byBomb) {
+    const i = G.enemies.indexOf(e);
+    if (i < 0) return;
+    G.enemies.splice(i, 1);
+    A.addScore(INFO[e.kind].pts);
+    explode(e.x, e.y, e.kind === 'lander' ? ['#2e2', '#fe2'] : e.kind === 'pod' ? ['#f3c', '#f22'] : ['#c3f', '#fff', '#39f'], 20);
+    A.sfx.noise({ d: 0.3, v: 0.25, f: 2500, f2: 150 });
+    if (e.kind === 'lander' && e.target && e.target.carrier === e) {
+      const h = e.target;
+      h.carrier = null; h.state = 'fall'; h.vy = 0; h.fallFrom = h.y;
+    }
+    if (e.kind === 'pod') {
+      const n = 4 + Math.floor(Math.random() * 3);
+      for (let k = 0; k < n; k++) { const s = spawnEnemy('swarmer', e.x, e.y); const a = Math.random() * 6.28; s.vx = Math.cos(a) * 60; s.vy = Math.sin(a) * 60; }
+    }
+  }
+
+  function killShip() {
+    const s = G.ship;
+    if (s.dead) return;
+    s.dead = true;
+    G.lives--;
+    G.respawn = 2.5;
+    explode(s.x, s.y, ['#fff', '#f22', '#fe2', '#c3f'], 50);
+    A.sfx.noise({ d: 1.4, v: 0.5, f: 2000, f2: 50 });
+    if (s.carry) { s.carry.state = 'fall'; s.carry.vy = 0; s.carry.fallFrom = s.y; s.carry = null; }
+  }
+
+  function fireAt(e, speed) {
+    const s = G.ship;
+    const dx = dxw(e.x, s.x + s.vx * 0.4), dy = s.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (Math.abs(dx) > 200) return;
+    G.shots.push({ x: e.x, y: e.y, vx: dx / d * speed, vy: dy / d * speed, life: 2.5 });
+    A.sfx.tone({ f: 500, f2: 250, d: 0.06, type: 'square', v: 0.03 });
+  }
+
+  function planetDies() {
+    G.planetDead = true;
+    for (const e of G.enemies) if (e.kind === 'lander') { e.kind = 'mutant'; e.target = null; }
+    A.sfx.noise({ d: 2.5, v: 0.6, f: 900, f2: 40 });
+    G.flash = 1;
+  }
+
+  A = Arcade.start({
+    id: 'guardian', title: 'PLANET GUARDIAN', subtitle: 'A TRIBUTE TO DEFENDER (1981)', color: '#2e2',
+    width: W, height: H,
+    help: ['UP/DOWN CLIMB AND DIVE', 'LEFT/RIGHT THRUST', '(PRESS BACK TO TURN)', 'SPACE FIRE', 'X OR SHIFT SMART BOMB', 'C HYPERSPACE', '', 'SAVE THE HUMANOIDS'],
+    keys: { b: ['KeyX', 'ShiftLeft', 'ShiftRight', 'KeyK'], c: ['KeyC', 'KeyL', 'KeyH'] },
+    touch: { dpad: '4', buttons: [{ act: 'c', label: 'HYPER' }, { act: 'b', label: 'BOMB' }, { act: 'fire', label: 'FIRE' }] },
+    newGame(a) {
+      G = { wave: 0, lives: 3, bombs: 3, enemies: [], humans: [], shots: [], mines: [], lasers: [], parts: [], pops: [], nextBonus: 10000, t: 0, ship: null, cam: 0, flash: 0 };
+      resetShip();
+      startWave();
+    },
+    update(a, dt) {
+      G.t += dt; G.waveT += dt;
+      if (G.banner > 0) G.banner -= dt;
+      if (G.flash > 0) G.flash -= dt;
+      const s = G.ship;
+
+      if (!s.dead) {
+        if (s.inv > 0) s.inv -= dt;
+        if (a.down('up')) s.y -= 130 * dt;
+        if (a.down('down')) s.y += 130 * dt;
+        s.y = Math.max(TOP + 4, Math.min(GROUND + 6, s.y));
+        const dir = (a.down('right') ? 1 : 0) - (a.down('left') ? 1 : 0);
+        if (dir && dir !== s.face && (a.pressed('left') || a.pressed('right'))) s.face = dir;
+        else if (dir === s.face) s.vx += s.face * 420 * dt;
+        s.vx *= Math.pow(0.35, dt);
+        s.vx = Math.max(-330, Math.min(330, s.vx));
+        s.x = wrapX(s.x + s.vx * dt);
+        if (a.pressed('fire') && G.lasers.length < 4) {
+          G.lasers.push({ x: wrapX(s.x + s.face * 8), y: s.y + 1, dir: s.face, len: 0, life: 0.45 });
+          a.sfx.tone({ f: 2200, f2: 700, d: 0.1, type: 'sawtooth', v: 0.05 });
+        }
+        if (a.pressed('b') && G.bombs > 0) {
+          G.bombs--; G.flash = 0.25;
+          for (const e of G.enemies.slice()) { const x = sx(e.x); if (x > -10 && x < W + 10) killEnemy(e, true); }
+          G.shots = G.shots.filter(b => { const x = sx(b.x); return x < 0 || x > W; });
+          a.sfx.noise({ d: 1, v: 0.5, f: 3000, f2: 100 });
+        }
+        if (a.pressed('c')) {
+          s.x = wrapX(s.x + 600 + Math.random() * (WW - 1200)); s.y = 60 + Math.random() * 140; s.vx = 0;
+          G.cam = wrapX(s.x - (s.face > 0 ? 80 : 240));
+          a.sfx.tone({ f: 200, f2: 2000, d: 0.3, type: 'sine', v: 0.1 });
+          if (Math.random() < 0.15) killShip();
+        }
+        // carrying a rescued humanoid: drop it off when touching the ground
+        if (s.carry) {
+          s.carry.x = s.x; s.carry.y = s.y + 8;
+          if (s.y + 8 >= groundAt(s.x) - 2) {
+            s.carry.state = 'walk'; s.carry.y = groundAt(s.x) - 2; s.carry = null;
+            a.addScore(500); G.pops.push({ x: s.x, y: s.y - 10, s: '500', t: 1 });
+            a.sfx.tune([[1047, .06], [1319, .1]], { v: .1 });
+          }
+        }
+      } else {
+        G.respawn -= dt;
+        if (G.respawn <= 0) {
+          if (G.lives <= 0) { a.gameOver(); return; }
+          resetShip();
+          // clear the area around the new ship
+          G.enemies = G.enemies.filter(e => Math.abs(dxw(G.ship.x, e.x)) > 200 || e.kind === 'lander' && e.state === 'carry');
+          G.shots = []; G.mines = [];
+        }
+      }
+
+      // camera leads the ship
+      const want = wrapX(s.x - (s.face > 0 ? 90 : 230));
+      G.cam = wrapX(G.cam + dxw(G.cam, want) * Math.min(1, dt * 3.5));
+
+      // lasers
+      for (let i = G.lasers.length - 1; i >= 0; i--) {
+        const L = G.lasers[i];
+        L.len = Math.min(320, L.len + 1100 * dt); L.life -= dt;
+        let hit = null, best = Infinity;
+        for (const e of G.enemies) {
+          const d = dxw(L.x, e.x) * L.dir;
+          if (d >= -4 && d <= L.len && Math.abs(e.y - L.y) < INFO[e.kind].r + 2 && d < best) { best = d; hit = e; }
+        }
+        if (hit) { killEnemy(hit); G.lasers.splice(i, 1); continue; }
+        if (L.life <= 0) G.lasers.splice(i, 1);
+      }
+
+      // lander batches
+      G.batchT -= dt;
+      if (!G.enemies.some(e => e.kind === 'lander' || e.kind === 'mutant')) G.batchT = Math.min(G.batchT, 1);
+      if (G.batchT <= 0 && G.landersLeft > 0) {
+        G.batchT = 9;
+        const n = Math.min(5, G.landersLeft);
+        G.landersLeft -= n;
+        for (let i = 0; i < n; i++) spawnEnemy(G.planetDead ? 'mutant' : 'lander', s.x + 300 + Math.random() * (WW - 600), TOP + 10);
+      }
+      if (G.waveT > 60 && Math.random() < dt * 0.15) { spawnEnemy('baiter', s.x + (Math.random() < 0.5 ? -1 : 1) * 200, 60 + Math.random() * 100); }
+
+      // enemies
+      const speedK = 1 + Math.min(G.wave, 10) * 0.06;
+      for (const e of G.enemies.slice()) {
+        e.t += dt;
+        const onScreen = (() => { const x = sx(e.x); return x > -20 && x < W + 20; })();
+        e.fireT -= dt;
+        switch (e.kind) {
+          case 'lander': {
+            if (e.state === 'seek') {
+              e.x = wrapX(e.x + e.vx * speedK * dt);
+              const gy = groundAt(e.x);
+              e.y += ((gy - 50 + Math.sin(e.t * 2) * 12) - e.y) * dt * 0.8;
+              if (!G.planetDead) {
+                const h = G.humans.find(h => h.state === 'walk' && Math.abs(dxw(e.x, h.x)) < 6 && !G.enemies.some(o => o.target === h));
+                if (h && Math.random() < dt * 2) { e.state = 'descend'; e.target = h; }
+              }
+            } else if (e.state === 'descend') {
+              const h = e.target;
+              if (!h || h.state !== 'walk') { e.state = 'seek'; e.target = null; break; }
+              e.x = wrapX(e.x + dxw(e.x, h.x) * dt * 3);
+              e.y += 40 * dt;
+              if (e.y >= h.y - 10) { e.state = 'carry'; h.state = 'carried'; h.carrier = e; a.sfx.tone({ f: 300, f2: 900, d: 0.4, type: 'triangle', v: 0.08 }); }
+            } else if (e.state === 'carry') {
+              e.y -= 16 * speedK * dt;
+              e.target.x = e.x; e.target.y = e.y + 9;
+              if (e.y < TOP + 6) {
+                // humanoid lost: lander becomes a mutant
+                const h = e.target; G.humans.splice(G.humans.indexOf(h), 1);
+                e.kind = 'mutant'; e.target = null; e.state = 'seek';
+                a.sfx.tone({ f: 150, f2: 60, d: 0.5, type: 'sawtooth', v: 0.1 });
+                if (!G.humans.length) planetDies();
+              }
+            }
+            if (onScreen && e.fireT <= 0) { e.fireT = 1.5 + Math.random() * 2.5; fireAt(e, 80); }
+            break;
+          }
+          case 'mutant': {
+            const dx = dxw(e.x, s.x), dy = s.y - e.y + Math.sin(e.t * 9) * 20;
+            e.x = wrapX(e.x + Math.sign(dx) * 75 * speedK * dt + (Math.random() - 0.5) * 60 * dt);
+            e.y += Math.sign(dy) * 60 * dt + (Math.random() - 0.5) * 80 * dt;
+            if (onScreen && e.fireT <= 0) { e.fireT = 1 + Math.random() * 1.5; fireAt(e, 100); }
+            break;
+          }
+          case 'bomber': {
+            e.x = wrapX(e.x + e.vx * dt); e.y += e.vy * Math.sin(e.t) * dt * 2;
+            if (e.fireT <= 0) { e.fireT = 0.9; G.mines.push({ x: e.x, y: e.y, life: 3 }); }
+            break;
+          }
+          case 'pod': {
+            e.x = wrapX(e.x + e.vx * dt); e.y += e.vy * dt;
+            if (e.y < TOP + 10 || e.y > 190) e.vy = -e.vy;
+            break;
+          }
+          case 'swarmer': {
+            const dx = dxw(e.x, s.x);
+            e.vx += Math.sign(dx) * 120 * dt; e.vx = Math.max(-130, Math.min(130, e.vx));
+            e.vy += Math.sign(s.y - e.y) * 90 * dt; e.vy = Math.max(-70, Math.min(70, e.vy));
+            e.x = wrapX(e.x + e.vx * dt); e.y += e.vy * dt;
+            if (onScreen && e.fireT <= 0) { e.fireT = 2 + Math.random() * 2; fireAt(e, 110); }
+            break;
+          }
+          case 'baiter': {
+            const dx = dxw(e.x, s.x);
+            e.vx += Math.sign(dx) * 300 * dt; e.vx = Math.max(-Math.abs(s.vx) - 90, Math.min(Math.abs(s.vx) + 90, e.vx));
+            e.y += Math.sign(s.y - 20 - e.y) * 70 * dt;
+            e.x = wrapX(e.x + e.vx * dt);
+            if (onScreen && e.fireT <= 0) { e.fireT = 0.8 + Math.random(); fireAt(e, 130); }
+            break;
+          }
+        }
+        e.y = Math.max(TOP + 4, Math.min(GROUND + 4, e.y));
+        if (!s.dead && s.inv <= 0 && Math.abs(dxw(s.x, e.x)) < INFO[e.kind].r + 5 && Math.abs(s.y - e.y) < INFO[e.kind].r + 2) { killEnemy(e); killShip(); }
+      }
+
+      // enemy shots and mines
+      for (let i = G.shots.length - 1; i >= 0; i--) {
+        const b = G.shots[i];
+        b.x = wrapX(b.x + b.vx * dt); b.y += b.vy * dt; b.life -= dt;
+        if (b.life <= 0 || b.y < TOP || b.y > H) { G.shots.splice(i, 1); continue; }
+        if (!s.dead && s.inv <= 0 && Math.abs(dxw(s.x, b.x)) < 6 && Math.abs(s.y - b.y) < 3) { G.shots.splice(i, 1); killShip(); }
+      }
+      for (let i = G.mines.length - 1; i >= 0; i--) {
+        const m = G.mines[i]; m.life -= dt;
+        if (m.life <= 0) { G.mines.splice(i, 1); continue; }
+        if (!s.dead && s.inv <= 0 && Math.abs(dxw(s.x, m.x)) < 5 && Math.abs(s.y - m.y) < 3) { G.mines.splice(i, 1); killShip(); }
+      }
+
+      // humanoids
+      for (const h of G.humans.slice()) {
+        if (h.state === 'walk') {
+          h.x = wrapX(h.x + h.vx * dt);
+          if (Math.random() < dt * 0.2) h.vx = -h.vx;
+          h.y = groundAt(h.x) - 2;
+        } else if (h.state === 'fall') {
+          h.vy = Math.min(90, h.vy + 60 * dt); h.y += h.vy * dt;
+          if (!s.dead && !s.carry && Math.abs(dxw(s.x, h.x)) < 10 && Math.abs(s.y + 6 - h.y) < 8) {
+            h.state = 'rescued'; s.carry = h;
+            a.addScore(500); G.pops.push({ x: h.x, y: h.y - 10, s: '500', t: 1 });
+            a.sfx.tune([[784, .06], [1047, .1]], { v: .1 });
+          } else if (h.y >= groundAt(h.x) - 2) {
+            if (h.y - h.fallFrom > 70) {
+              G.humans.splice(G.humans.indexOf(h), 1);
+              explode(h.x, h.y, ['#f90', '#f3c'], 10);
+              if (!G.humans.length) planetDies();
+            } else {
+              h.state = 'walk'; h.y = groundAt(h.x) - 2;
+              a.addScore(250); G.pops.push({ x: h.x, y: h.y - 10, s: '250', t: 1 });
+            }
+          }
+        }
+      }
+
+      for (let i = G.parts.length - 1; i >= 0; i--) { const q = G.parts[i]; q.x = wrapX(q.x + q.vx * dt); q.y += q.vy * dt; q.life -= dt; if (q.life <= 0) G.parts.splice(i, 1); }
+      for (let i = G.pops.length - 1; i >= 0; i--) { G.pops[i].t -= dt; if (G.pops[i].t <= 0) G.pops.splice(i, 1); }
+
+      if (a.score >= G.nextBonus) { G.nextBonus += 10000; G.lives++; G.bombs++; a.sfx.tune([[880, .08], [1175, .08], [1760, .15]], { v: .1 }); }
+
+      // wave over when every enemy (except baiters) is gone
+      if (G.landersLeft <= 0 && !G.enemies.some(e => e.kind !== 'baiter') && !s.dead) {
+        G.clearT = (G.clearT || 0) + dt;
+        if (G.clearT > 1.5) {
+          G.clearT = 0;
+          const bonus = G.humans.length * 100 * Math.min(G.wave, 5);
+          a.addScore(bonus);
+          G.pops.push({ x: s.x, y: 110, s: 'ATTACK WAVE ' + G.wave + ' COMPLETED  BONUS ' + bonus, t: 2.5, fixed: true });
+          G.enemies = [];
+          G.bombs = Math.max(G.bombs, 3);
+          startWave();
+        }
+      }
+    },
+    draw(a) {
+      const c = a.ctx;
+      if (G.flash > 0) { c.fillStyle = G.flash > 0.5 ? '#fff' : '#223'; c.fillRect(0, TOP, W, H - TOP); }
+      // stars
+      for (let i = 0; i < 40; i++) {
+        const x = wrapX(i * 131 - G.cam * 0.3) % W, y = TOP + ((i * 53) % 150);
+        c.fillStyle = i % 3 ? '#555' : '#999'; c.fillRect(x, y, 1, 1);
+      }
+      // terrain
+      if (!G.planetDead) {
+        c.strokeStyle = '#a63'; c.lineWidth = 1; c.beginPath();
+        for (let x = 0; x <= W; x += 2) { const y = groundAt(G.cam + x); x ? c.lineTo(x, y) : c.moveTo(x, y); }
+        c.stroke();
+      }
+      // humans
+      const hf = Math.floor(G.t * 4) % 2;
+      for (const h of G.humans) { const x = sx(h.x); if (x > -5 && x < W + 5) c.drawImage(IMG.human[h.state === 'walk' ? hf : 0], Math.round(x - 1), Math.round(h.y - 4)); }
+      // enemies
+      const ef = Math.floor(G.t * 5) % 2;
+      for (const e of G.enemies) {
+        const x = sx(e.x);
+        if (x < -12 || x > W + 12) continue;
+        const imgs = INFO[e.kind].img, img = imgs[ef % imgs.length];
+        c.drawImage(img, Math.round(x - img.width / 2), Math.round(e.y - img.height / 2));
+      }
+      c.fillStyle = '#fff';
+      for (const m of G.mines) { const x = sx(m.x); if (x > 0 && x < W) { c.fillStyle = Math.floor(G.t * 10) % 2 ? '#fff' : '#f3c'; c.fillRect(x - 1, m.y - 1, 2, 2); } }
+      for (const b of G.shots) { const x = sx(b.x); if (x > 0 && x < W) { c.fillStyle = '#fff'; c.fillRect(x - 1, b.y - 1, 2, 2); } }
+      // lasers
+      for (const L of G.lasers) {
+        const x0 = sx(L.x);
+        const grad = c.createLinearGradient(x0, 0, x0 + L.dir * L.len, 0);
+        grad.addColorStop(0, '#fff'); grad.addColorStop(0.5, '#f3c'); grad.addColorStop(1, 'rgba(60,160,255,0.2)');
+        c.fillStyle = grad;
+        c.fillRect(L.dir > 0 ? x0 : x0 - L.len, L.y, L.len, 1);
+      }
+      // ship
+      const s = G.ship;
+      if (!s.dead && !(s.inv > 0 && Math.floor(G.t * 12) % 2)) {
+        const x = sx(s.x);
+        c.save(); c.translate(Math.round(x), Math.round(s.y)); c.scale(s.face, 1);
+        c.drawImage(IMG.ship, -7, -3);
+        if (Math.abs(s.vx) > 30 && (a.down('left') || a.down('right'))) { c.fillStyle = A.pick(['#f90', '#fe2', '#f22']); c.fillRect(-9 - Math.random() * 4, -1, 3, 2); }
+        c.restore();
+      }
+      for (const q of G.parts) { const x = sx(q.x); c.fillStyle = q.c; c.fillRect(x, q.y, 2, 2); }
+      for (const p of G.pops) { if (p.fixed) a.text(p.s, W / 2, 120, 6, '#fff', 'center'); else a.text(p.s, sx(p.x), p.y, 6, '#fff', 'center'); }
+
+      // scanner
+      c.fillStyle = '#000'; c.fillRect(0, 0, W, TOP);
+      const SX = 90, SW = 140, SY = 3, SH = 28;
+      c.strokeStyle = '#33f'; c.strokeRect(SX - 0.5, SY - 0.5, SW + 1, SH + 1);
+      c.fillStyle = '#33f'; c.fillRect(0, TOP - 1, W, 1);
+      const centre = wrapX(G.cam + W / 2);
+      const toScan = (x, y) => [SX + SW / 2 + dxw(centre, x) / WW * SW, SY + (y - TOP) / (GROUND + 8 - TOP) * SH];
+      if (!G.planetDead) { c.fillStyle = '#a63'; for (let i = 0; i < SW; i += 2) { const wx = centre + (i - SW / 2) / SW * WW; const [, y] = toScan(0, groundAt(wx)); c.fillRect(SX + i, y, 1, 1); } }
+      const sc = { lander: '#2e2', mutant: '#c3f', bomber: '#39f', pod: '#f3c', swarmer: '#f22', baiter: '#2e2' };
+      for (const e of G.enemies) { const [x, y] = toScan(e.x, e.y); c.fillStyle = sc[e.kind]; c.fillRect(x - 1, y - 1, 2, 2); }
+      c.fillStyle = '#f90'; for (const h of G.humans) { const [x, y] = toScan(h.x, h.y); c.fillRect(x, y - 1, 1, 2); }
+      if (!s.dead) { const [x, y] = toScan(s.x, s.y); c.fillStyle = '#fff'; c.fillRect(x - 1, y - 1, 3, 2); }
+      const vw = W / WW * SW;
+      c.strokeStyle = '#fff'; c.beginPath();
+      c.moveTo(SX + SW / 2 - vw / 2, SY); c.lineTo(SX + SW / 2 - vw / 2 + 3, SY); c.moveTo(SX + SW / 2 + vw / 2, SY); c.lineTo(SX + SW / 2 + vw / 2 - 3, SY);
+      c.moveTo(SX + SW / 2 - vw / 2, SY + SH); c.lineTo(SX + SW / 2 - vw / 2 + 3, SY + SH); c.moveTo(SX + SW / 2 + vw / 2, SY + SH); c.lineTo(SX + SW / 2 + vw / 2 - 3, SY + SH);
+      c.stroke();
+      a.text(String(a.score), 84, 6, 8, '#fe2', 'right');
+      for (let i = 0; i < Math.min(G.lives - (s.dead ? 0 : 1), 5); i++) c.drawImage(IMG.ship, 6 + i * 16, 20, 11, 5);
+      for (let i = 0; i < Math.min(G.bombs, 5); i++) { c.fillStyle = '#f3c'; c.fillRect(W - 10 - i * 7, 8, 4, 4); }
+      a.text('HI ' + a.hi, W - 6, 22, 6, '#888', 'right');
+      if (G.banner > 0) a.text('ATTACK WAVE ' + G.wave, W / 2, 110, 8, '#2e2', 'center');
+      if (G.planetDead && Math.floor(G.t * 2) % 2) a.text('THE PLANET IS LOST', W / 2, 200, 6, '#c3f', 'center');
+    },
+  });
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rock Storm</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script>
+(function () {
+  const W = 640, H = 480;
+  const TAU = Math.PI * 2;
+  const ROCK_R = [0, 10, 20, 40];          // by size 1..3
+  const ROCK_PTS = [0, 100, 50, 20];
+  const SHIP = [[12, 0], [-9, -8], [-5, 0], [-9, 8]];
+  let G;
+
+  function wrap(o) {
+    if (o.x < 0) o.x += W; else if (o.x >= W) o.x -= W;
+    if (o.y < 0) o.y += H; else if (o.y >= H) o.y -= H;
+  }
+  function dist2(a, b) {
+    let dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+    if (dx > W / 2) dx = W - dx;
+    if (dy > H / 2) dy = H - dy;
+    return dx * dx + dy * dy;
+  }
+  function makeRock(size, x, y) {
+    const n = 11, pts = [];
+    for (let i = 0; i < n; i++) pts.push(0.72 + Math.random() * 0.36);
+    const sp = (1.2 - size * 0.25) * (30 + Math.random() * 40) * (1 + G.wave * 0.05);
+    const a = Math.random() * TAU;
+    return { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, size, r: ROCK_R[size], pts, rot: Math.random() * TAU, spin: (Math.random() - 0.5) * 1.5 };
+  }
+  function newWave() {
+    G.wave++;
+    const n = Math.min(4 + (G.wave - 1) * 2, 11);
+    for (let i = 0; i < n; i++) {
+      let x, y;
+      do { x = Math.random() * W; y = Math.random() * H; } while (Math.hypot(x - W / 2, y - H / 2) < 150);
+      G.rocks.push(makeRock(3, x, y));
+    }
+    G.beat = 1.0;
+    G.saucerTimer = 12 + Math.random() * 8;
+  }
+  function resetShip() {
+    G.ship = { x: W / 2, y: H / 2, vx: 0, vy: 0, a: -Math.PI / 2, dead: false, inv: 2.5, thrust: false };
+  }
+  function boom(x, y, n, col) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * TAU, s = 30 + Math.random() * 120;
+      G.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.6, col: col || '#fff' });
+    }
+  }
+  function explodeSound(size) {
+    A.sfx.noise({ d: 0.15 + size * 0.15, v: 0.25 + size * 0.08, f: 3000 / size, f2: 100 });
+  }
+  function killShip() {
+    const s = G.ship;
+    boom(s.x, s.y, 30, '#8ff');
+    G.debris = SHIP.map((p, i) => {
+      const q = SHIP[(i + 1) % SHIP.length], a = Math.random() * TAU;
+      return { x: s.x, y: s.y, x1: p[0], y1: p[1], x2: q[0], y2: q[1], vx: Math.cos(a) * 40, vy: Math.sin(a) * 40, rot: s.a, spin: (Math.random() - 0.5) * 6, life: 2 };
+    });
+    A.sfx.noise({ d: 1.2, v: 0.5, f: 1500, f2: 60 });
+    s.dead = true;
+    G.lives--;
+    G.respawn = 2.5;
+  }
+  function splitRock(r, i) {
+    G.rocks.splice(i, 1);
+    A.addScore(ROCK_PTS[r.size]);
+    boom(r.x, r.y, 6 + r.size * 4);
+    explodeSound(r.size);
+    if (r.size > 1) for (let k = 0; k < 2; k++) G.rocks.push(makeRock(r.size - 1, r.x, r.y));
+  }
+  function spawnSaucer() {
+    const small = A.score > 10000 ? Math.random() < 0.7 : Math.random() < 0.25;
+    const left = Math.random() < 0.5;
+    G.saucer = { x: left ? 0 : W - 1, y: 40 + Math.random() * (H - 80), vx: (left ? 1 : -1) * (small ? 110 : 80), vy: 0, small, r: small ? 8 : 16, fire: 1, turn: 1.5, tone: 0 };
+  }
+
+  let A;
+  A = Arcade.start({
+    id: 'rocks', title: 'ROCK STORM', subtitle: 'A TRIBUTE TO ASTEROIDS (1979)', color: '#fff',
+    width: W, height: H,
+    help: ['LEFT/RIGHT  ROTATE', 'UP  THRUST', 'SPACE  FIRE', 'SHIFT OR X  HYPERSPACE'],
+    touch: { dpad: '4', buttons: [{ act: 'b', label: 'HYPER' }, { act: 'fire', label: 'FIRE' }] },
+    newGame(a) {
+      G = { wave: 0, lives: 3, rocks: [], shots: [], eshots: [], parts: [], debris: [], saucer: null, beat: 1, beatT: 0, beatHi: false, nextLife: 10000, respawn: 0, waveDelay: 0 };
+      resetShip();
+      newWave();
+    },
+    update(a, dt) {
+      const s = G.ship;
+      // ship
+      if (!s.dead) {
+        if (a.down('left')) s.a -= 4.6 * dt;
+        if (a.down('right')) s.a += 4.6 * dt;
+        s.thrust = a.down('up');
+        if (s.thrust) {
+          s.vx += Math.cos(s.a) * 260 * dt;
+          s.vy += Math.sin(s.a) * 260 * dt;
+          if (Math.random() < 0.3) a.sfx.noise({ d: 0.08, v: 0.08, f: 400 });
+        }
+        const sp = Math.hypot(s.vx, s.vy);
+        if (sp > 380) { s.vx *= 380 / sp; s.vy *= 380 / sp; }
+        s.vx *= Math.pow(0.55, dt); s.vy *= Math.pow(0.55, dt);
+        s.x += s.vx * dt; s.y += s.vy * dt; wrap(s);
+        if (s.inv > 0) s.inv -= dt;
+        if (a.pressed('fire') && G.shots.length < 4) {
+          G.shots.push({ x: s.x + Math.cos(s.a) * 12, y: s.y + Math.sin(s.a) * 12, vx: s.vx + Math.cos(s.a) * 520, vy: s.vy + Math.sin(s.a) * 520, life: 0.9 });
+          a.sfx.tone({ f: 1400, f2: 300, d: 0.12, type: 'square', v: 0.08 });
+        }
+        if (a.pressed('b')) {
+          s.x = Math.random() * W; s.y = Math.random() * H; s.vx = s.vy = 0;
+          a.sfx.tone({ f: 200, f2: 1600, d: 0.25, type: 'sine', v: 0.15 });
+          if (Math.random() < 0.08) killShip();
+        }
+      } else if (G.lives > 0) {
+        G.respawn -= dt;
+        if (G.respawn <= 0) {
+          const clear = G.rocks.every(r => Math.hypot(r.x - W / 2, r.y - H / 2) > r.r + 70);
+          if (clear) resetShip();
+        }
+      } else if (G.respawn > -2) {
+        G.respawn -= dt;
+        if (G.respawn < -1.5) { a.gameOver(); return; }
+      }
+
+      // heartbeat
+      if (G.rocks.length) {
+        G.beatT -= dt;
+        if (G.beatT <= 0) {
+          G.beatHi = !G.beatHi;
+          a.sfx.tone({ f: G.beatHi ? 62 : 55, d: 0.12, type: 'triangle', v: 0.35 });
+          G.beat = Math.max(0.22, G.beat - 0.012);
+          G.beatT = G.beat;
+        }
+      }
+
+      // shots
+      for (const list of [G.shots, G.eshots]) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          const b = list[i];
+          b.x += b.vx * dt; b.y += b.vy * dt; wrap(b);
+          b.life -= dt;
+          if (b.life <= 0) list.splice(i, 1);
+        }
+      }
+      // rocks
+      for (const r of G.rocks) { r.x += r.vx * dt; r.y += r.vy * dt; r.rot += r.spin * dt; wrap(r); }
+
+      // player shots vs rocks / saucer
+      for (let i = G.shots.length - 1; i >= 0; i--) {
+        const b = G.shots[i];
+        let hitAny = false;
+        for (let j = G.rocks.length - 1; j >= 0; j--) {
+          const r = G.rocks[j];
+          if (dist2(b, r) < r.r * r.r) { splitRock(r, j); hitAny = true; break; }
+        }
+        if (!hitAny && G.saucer && dist2(b, G.saucer) < G.saucer.r * G.saucer.r) {
+          a.addScore(G.saucer.small ? 1000 : 200);
+          boom(G.saucer.x, G.saucer.y, 20, '#f8f'); explodeSound(3);
+          G.saucer = null; hitAny = true;
+        }
+        if (hitAny) G.shots.splice(i, 1);
+      }
+      // enemy shots vs rocks and ship
+      for (let i = G.eshots.length - 1; i >= 0; i--) {
+        const b = G.eshots[i];
+        if (!s.dead && s.inv <= 0 && dist2(b, s) < 100) { G.eshots.splice(i, 1); killShip(); continue; }
+        for (let j = G.rocks.length - 1; j >= 0; j--) {
+          if (dist2(b, G.rocks[j]) < G.rocks[j].r ** 2) { const r = G.rocks[j]; G.rocks.splice(j, 1); boom(r.x, r.y, 8); explodeSound(r.size); if (r.size > 1) for (let k = 0; k < 2; k++) G.rocks.push(makeRock(r.size - 1, r.x, r.y)); G.eshots.splice(i, 1); break; }
+        }
+      }
+      // ship vs rocks
+      if (!s.dead && s.inv <= 0) {
+        for (let j = G.rocks.length - 1; j >= 0; j--) {
+          const r = G.rocks[j];
+          if (dist2(s, r) < (r.r + 8) ** 2) { splitRock(r, j); killShip(); break; }
+        }
+        if (!s.dead && G.saucer && dist2(s, G.saucer) < (G.saucer.r + 8) ** 2) {
+          a.addScore(G.saucer.small ? 1000 : 200); boom(G.saucer.x, G.saucer.y, 20, '#f8f'); G.saucer = null; killShip();
+        }
+      }
+
+      // saucer
+      if (G.saucer) {
+        const u = G.saucer;
+        u.x += u.vx * dt; u.y += u.vy * dt;
+        if (u.y < 0) u.y += H; if (u.y >= H) u.y -= H;
+        u.turn -= dt;
+        if (u.turn <= 0) { u.turn = 1 + Math.random() * 1.5; u.vy = [-1, 0, 1][Math.floor(Math.random() * 3)] * Math.abs(u.vx) * 0.7; }
+        u.tone -= dt;
+        if (u.tone <= 0) { u.tone = 0.16; a.sfx.tone({ f: u.small ? 1100 : 700, f2: u.small ? 900 : 560, d: 0.14, type: 'sawtooth', v: 0.04 }); }
+        u.fire -= dt;
+        if (u.fire <= 0) {
+          u.fire = u.small ? 0.9 : 1.3;
+          let ang;
+          if (u.small && !s.dead) {
+            const err = Math.max(0.05, 0.5 - A.score / 40000);
+            ang = Math.atan2(s.y - u.y, s.x - u.x) + (Math.random() - 0.5) * err;
+          } else ang = Math.random() * TAU;
+          G.eshots.push({ x: u.x, y: u.y, vx: Math.cos(ang) * 300, vy: Math.sin(ang) * 300, life: 1.1 });
+          a.sfx.tone({ f: 900, f2: 400, d: 0.1, v: 0.05 });
+        }
+        if (u.x < -20 || u.x > W + 20) G.saucer = null;
+        for (let j = G.rocks.length - 1; G.saucer && j >= 0; j--) {
+          if (dist2(u, G.rocks[j]) < (G.rocks[j].r + u.r) ** 2) { const r = G.rocks[j]; G.rocks.splice(j, 1); boom(u.x, u.y, 16, '#f8f'); explodeSound(3); if (r.size > 1) for (let k = 0; k < 2; k++) G.rocks.push(makeRock(r.size - 1, r.x, r.y)); G.saucer = null; }
+        }
+      } else if (G.rocks.length) {
+        G.saucerTimer -= dt;
+        if (G.saucerTimer <= 0) { spawnSaucer(); G.saucerTimer = Math.max(6, 16 - G.wave) + Math.random() * 6; }
+      }
+
+      // particles
+      for (const list of [G.parts, G.debris]) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          const p = list[i];
+          p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+          if (p.rot != null) p.rot += p.spin * dt;
+          if (p.life <= 0) list.splice(i, 1);
+        }
+      }
+
+      if (A.score >= G.nextLife) {
+        G.lives++; G.nextLife += 10000;
+        a.sfx.tune([[880, 0.08], [1320, 0.08], [1760, 0.12]], { v: 0.1 });
+      }
+      if (!G.rocks.length && !G.saucer) {
+        G.waveDelay += dt;
+        if (G.waveDelay > 2) { G.waveDelay = 0; newWave(); }
+      }
+    },
+    draw(a) {
+      const c = a.ctx;
+      c.lineWidth = 1.6;
+      c.lineJoin = 'round';
+      c.shadowColor = '#9cf';
+      c.shadowBlur = 6;
+      c.strokeStyle = '#fff';
+      // rocks
+      for (const r of G.rocks) {
+        for (const [ox, oy] of wrapOffsets(r, r.r)) {
+          c.beginPath();
+          for (let i = 0; i < r.pts.length; i++) {
+            const an = r.rot + i / r.pts.length * TAU, rr = r.r * r.pts[i];
+            const px = r.x + ox + Math.cos(an) * rr, py = r.y + oy + Math.sin(an) * rr;
+            i ? c.lineTo(px, py) : c.moveTo(px, py);
+          }
+          c.closePath(); c.stroke();
+        }
+      }
+      // ship
+      const s = G.ship;
+      if (!s.dead && (s.inv <= 0 || Math.floor(s.inv * 10) % 2 === 0)) {
+        drawShip(c, s.x, s.y, s.a, 1);
+        if (s.thrust && Math.random() < 0.7) {
+          c.beginPath();
+          c.moveTo(...rot(-6, -4, s)); c.lineTo(...rot(-15 - Math.random() * 5, 0, s)); c.lineTo(...rot(-6, 4, s));
+          c.stroke();
+        }
+      }
+      for (const d of G.debris) {
+        c.globalAlpha = Math.min(1, d.life);
+        const co = Math.cos(d.rot), si = Math.sin(d.rot);
+        c.beginPath();
+        c.moveTo(d.x + d.x1 * co - d.y1 * si, d.y + d.x1 * si + d.y1 * co);
+        c.lineTo(d.x + d.x2 * co - d.y2 * si, d.y + d.x2 * si + d.y2 * co);
+        c.stroke();
+      }
+      c.globalAlpha = 1;
+      // saucer
+      if (G.saucer) {
+        const u = G.saucer, k = u.r / 16;
+        c.strokeStyle = '#f8f'; c.shadowColor = '#f8f';
+        c.beginPath();
+        c.moveTo(u.x - 16 * k, u.y); c.lineTo(u.x + 16 * k, u.y);
+        c.moveTo(u.x - 16 * k, u.y); c.lineTo(u.x - 8 * k, u.y - 5 * k); c.lineTo(u.x + 8 * k, u.y - 5 * k); c.lineTo(u.x + 16 * k, u.y);
+        c.lineTo(u.x + 8 * k, u.y + 5 * k); c.lineTo(u.x - 8 * k, u.y + 5 * k); c.closePath();
+        c.moveTo(u.x - 6 * k, u.y - 5 * k); c.lineTo(u.x - 3 * k, u.y - 11 * k); c.lineTo(u.x + 3 * k, u.y - 11 * k); c.lineTo(u.x + 6 * k, u.y - 5 * k);
+        c.stroke();
+      }
+      // shots
+      c.fillStyle = '#fff';
+      for (const b of G.shots) c.fillRect(b.x - 1.5, b.y - 1.5, 3, 3);
+      c.fillStyle = '#f8f';
+      for (const b of G.eshots) c.fillRect(b.x - 1.5, b.y - 1.5, 3, 3);
+      for (const p of G.parts) { c.globalAlpha = Math.min(1, p.life * 2); c.fillStyle = p.col; c.fillRect(p.x, p.y, 2, 2); }
+      c.globalAlpha = 1;
+      c.shadowBlur = 0;
+      // HUD
+      a.text(String(a.score).padStart(2, '0'), 20, 12, 16, '#fff');
+      a.text(String(a.hi), W / 2, 12, 10, '#aaa', 'center');
+      c.strokeStyle = '#fff';
+      for (let i = 0; i < Math.min(G.lives, 10); i++) drawShip(c, 28 + i * 18, 48, -Math.PI / 2, 0.8);
+      if (!G.rocks.length && !G.saucer && G.waveDelay > 0) a.text('WAVE ' + (G.wave + 1), W / 2, H / 2 - 8, 14, '#8ff', 'center');
+      if (G.ship.dead && G.lives > 0 && G.respawn <= 0) a.text('WAITING FOR CLEAR SPACE', W / 2, H / 2 + 40, 8, '#888', 'center');
+    },
+  });
+
+  window.__g = () => G;
+  function rot(x, y, s) {
+    const co = Math.cos(s.a), si = Math.sin(s.a);
+    return [s.x + x * co - y * si, s.y + x * si + y * co];
+  }
+  function drawShip(c, x, y, ang, k) {
+    const co = Math.cos(ang), si = Math.sin(ang);
+    c.beginPath();
+    SHIP.forEach(([px, py], i) => {
+      const X = x + (px * co - py * si) * k, Y = y + (px * si + py * co) * k;
+      i ? c.lineTo(X, Y) : c.moveTo(X, Y);
+    });
+    c.closePath(); c.stroke();
+  }
+  // draw copies at the screen edges so rocks slide smoothly across the wrap
+  function wrapOffsets(o, r) {
+    const out = [[0, 0]];
+    const xs = [0], ys = [0];
+    if (o.x < r) xs.push(W); if (o.x > W - r) xs.push(-W);
+    if (o.y < r) ys.push(H); if (o.y > H - r) ys.push(-H);
+    for (const x of xs) for (const y of ys) if (x || y) out.push([x, y]);
+    return out;
+  }
+})();
+</script>
+</body>
+</html>
