@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Retro Arcade</title>
-<meta name="description" content="Twenty-three classic arcade and PC games, rebuilt to play free in your browser.">
+<meta name="description" content="Eighteen classic arcade and PC games, rebuilt to play free in your browser.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
 <style>
@@ -64,14 +64,14 @@
 <body>
 <header>
   <h1>RETRO ARCADE</h1>
-  <p class="tag">Twenty-three classics. No quarters required.</p>
+  <p class="tag">Eighteen classics. No quarters required.</p>
   <div class="coin">INSERT COIN</div>
 </header>
 <main>
   <div class="grid" id="grid"></div>
   <div class="help">
     <b>Keyboard:</b> arrow keys to move, Space to fire, P to pause, M for sound, Enter to start.<br>
-    <b>iPad and phones:</b> on-screen buttons show up automatically. City Shield is tap to fire. In Pin Seeker, swipe down then up to swing. The two racers also have tilt steering (tap TILT at the top). The 3D shooters use STRAFE, OPEN and FIRE buttons.<br>
+    <b>iPad and phones:</b> on-screen buttons show up automatically. City Shield is tap to fire. In Pin Seeker, swipe down then up to swing. The two racers also have tilt steering (tap TILT at the top).<br>
     <b>Save to home screen:</b> in Safari tap Share, then Add to Home Screen.<br>
     High scores are kept on each device.
   </div>
@@ -79,7 +79,7 @@
 <footer>
   Every game except Zork is an original rebuild, made as a tribute to the arcade classic it's named after, and uses none of the original code or artwork.<br>
   Zork I is the real 1980 Infocom game, released under the MIT license by Microsoft in 2025 (<a href="https://github.com/historicalsource/zork1" target="_blank" rel="noopener">source</a>).<br>
-  Freedoom and Blasphemer run the real Doom and Heretic engines (<a href="https://github.com/chocolate-doom/chocolate-doom" target="_blank" rel="noopener">Chocolate Doom</a>, GPL) with the free, BSD-licensed <a href="https://freedoom.github.io" target="_blank" rel="noopener">Freedoom</a> and <a href="https://github.com/Blasphemer/blasphemer" target="_blank" rel="noopener">Blasphemer</a> game data. Engine source and license: engine/COPYING-GPL.md.<br>
+  Freedoom runs the real Doom engine (<a href="https://github.com/chocolate-doom/chocolate-doom" target="_blank" rel="noopener">Chocolate Doom</a>, GPL) with the free, BSD-licensed <a href="https://freedoom.github.io" target="_blank" rel="noopener">Freedoom</a> game data. Engine source and license: engine/COPYING-GPL.md.<br>
   Music and sound effects are public domain (CC0) from <a href="https://opengameart.org" target="_blank" rel="noopener">OpenGameArt</a>, by Juhani Junkala, Alex McCulloch and Spring Spring.
 </footer>
 <script>
@@ -97,16 +97,11 @@
     { id: 'cruiser', name: 'SUNSET CRUISER', orig: 'Out Run, 1986', c: '#ff7a3d' },
     { id: 'leaner', name: 'LEAN MACHINE', orig: 'Hang-On, 1985', c: '#ff3b3b' },
     { id: 'girder', name: 'GIRDER CLIMB', orig: 'Donkey Kong, 1981', c: '#e0205a' },
-    { id: 'knight', name: "KNIGHT'S GAUNTLET", orig: "Dragon's Lair, 1983", c: '#ffd21e' },
     { id: 'missmuncher', name: 'MISS MUNCHER', orig: 'Ms. Pac-Man, 1982', c: '#ff5cb8' },
     { id: 'pinseeker', name: 'PIN SEEKER', orig: 'Golden Tee, 1989', c: '#7fdc6a' },
     { id: 'skyfury', name: 'SKY FURY', orig: 'After Burner, 1987', c: '#7cf' },
     { id: 'stomper', name: 'CITY STOMPER', orig: 'Rampage, 1986', c: '#3fa04a' },
-    { id: 'castle', name: 'CASTLE ESCAPE', orig: 'Wolfenstein 3D, 1992', c: '#ffd21e' },
-    { id: 'havoc', name: 'MAX HAVOC', orig: 'Duke Nukem 3D, 1996', c: '#ff3a3a' },
-    { id: 'vector', name: 'VECTOR STRIKE', orig: 'Star Wars, 1983', c: '#2fbf5a' },
     { id: 'freedoom', name: 'FREEDOOM', orig: 'Doom, 1993', c: '#e0301f', engine: true },
-    { id: 'blasphemer', name: 'BLASPHEMER', orig: 'Heretic, 1994', c: '#9a6aff', engine: true },
   ];
   const grid = document.getElementById('grid');
   const hi = id => { try { return parseInt(localStorage.getItem('arcade.hi.' + id) || '0', 10) || 0; } catch (e) { return 0; } };
