@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Knight's Gauntlet</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script>
+(function () {
+  const W = 320, H = 224, FLOOR = 190;
+  const AU = Arcade.Audio;
+  AU.load({
+    'knight-halls': '../../assets/audio/knight-halls.m4a', 'knight-deep': '../../assets/audio/knight-deep.m4a', 'knight-dragon': '../../assets/audio/knight-dragon.m4a',
+    sword: '../../assets/sfx/sword.wav', sword2: '../../assets/sfx/sword2.wav', whoosh: '../../assets/sfx/whoosh.wav', scream: '../../assets/sfx/scream.wav',
+    roar: '../../assets/sfx/roar.wav', fire: '../../assets/sfx/fire.wav', hit: '../../assets/sfx/hit.wav', crash: '../../assets/sfx/crash.wav',
+    fanfare: '../../assets/sfx/fanfare.wav', cue: '../../assets/sfx/cue.wav', jump: '../../assets/sfx/jump.wav', fall: '../../assets/sfx/fall.wav',
+  });
+  const lerp = (a, b, p) => a + (b - a) * p;
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+  const easeIO = p => p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2;
+  const R = Math.PI / 180;
+  const KS = 1.4;   // knight size
+
+  // ---------- the knight: a jointed puppet so every move animates smoothly ----------
+  // angles in degrees; limbs: 0 = straight down, positive swings toward the facing side
+  const POSES = {
+    stand: { tor: -2, uaF: 20, faF: 60, uaB: -12, faB: -5, thF: 6, shF: -4, thB: -8, shB: -2, sw: 150 },
+    alert: { tor: 8, uaF: 45, faF: 100, uaB: -20, faB: 10, thF: 20, shF: -10, thB: -22, shB: 0, sw: 130 },
+    runA: { tor: 16, uaF: -45, faF: 10, uaB: 50, faB: 95, thF: 45, shF: -10, thB: -35, shB: 60, sw: 170 },
+    runB: { tor: 16, uaF: 50, faF: 95, uaB: -45, faB: 10, thF: -35, shF: 60, thB: 45, shB: -10, sw: 110 },
+    jump: { tor: 22, uaF: 120, faF: 160, uaB: 110, faB: 150, thF: 75, shF: -40, thB: 30, shB: -80, sw: 160 },
+    swing: { tor: 26, uaF: 95, faF: 95, uaB: -30, faB: 20, thF: 40, shF: -8, thB: -30, shB: 5, sw: 92 },
+    windup: { tor: -8, uaF: 160, faF: 200, uaB: -20, faB: 20, thF: 25, shF: -5, thB: -20, shB: 0, sw: 215 },
+    duck: { tor: 55, uaF: 70, faF: 120, uaB: 40, faB: 80, thF: 95, shF: -40, thB: 60, shB: -70, sw: 140 },
+    hang: { tor: 0, uaF: 170, faF: 175, uaB: 165, faB: 175, thF: 15, shF: 0, thB: -10, shB: 5, sw: 180 },
+    fall: { tor: -10, uaF: 150, faF: 200, uaB: 140, faB: 110, thF: 30, shF: 70, thB: -30, shB: -60, sw: 250 },
+    hide: { tor: -6, uaF: 10, faF: 10, uaB: -5, faB: -5, thF: 2, shF: 0, thB: -2, shB: 0, sw: 180 },
+  };
+  function blend(a, b, p) { const o = {}; for (const k in a) o[k] = lerp(a[k], b[k], p); return o; }
+  function poseAt(name, t) {
+    if (name === 'run') return blend(POSES.runA, POSES.runB, (Math.sin(t * 14) + 1) / 2);
+    if (name === 'idle') return blend(POSES.alert, POSES.stand, (Math.sin(t * 3) + 1) / 4);
+    return POSES[name] || POSES.stand;
+  }
+
+  function knight(c, x, y, pose, face, o) {
+    o = o || {};
+    const P = typeof pose === 'string' ? poseAt(pose, o.t || 0) : pose;
+    const s = (o.scale || 1) * (o.hud ? 1 : KS), f = face;
+    const pt = (x0, y0, ang, len) => [x0 + Math.sin(ang * R) * len * f * s, y0 + Math.cos(ang * R) * len * s];
+    c.save();
+    if (o.squash) { c.translate(x, y); c.scale(1 + (1 - o.squash) * 0.8, o.squash); c.translate(-x, -y); }
+    const hip = [x, y - 16 * s];
+    const kF = pt(hip[0], hip[1], P.thF, 8), fF = pt(kF[0], kF[1], P.shF, 8);
+    const kB = pt(hip[0], hip[1], P.thB, 8), fB = pt(kB[0], kB[1], P.shB, 8);
+    const sh = [hip[0] + Math.sin(P.tor * R) * 13 * f * s, hip[1] - Math.cos(P.tor * R) * 13 * s];
+    const head = [sh[0] + Math.sin(P.tor * R) * 6 * f * s, sh[1] - Math.cos(P.tor * R) * 6 * s];
+    const eF = pt(sh[0], sh[1], P.uaF, 7), hF = pt(eF[0], eF[1], P.faF, 6);
+    const eB = pt(sh[0], sh[1], P.uaB, 7), hB = pt(eB[0], eB[1], P.faB, 6);
+    const skel = o.skel, tint = o.tint;
+    const armor = tint || (skel ? '#f4f0e0' : '#cfd3e0'), dark = tint || (skel ? '#d8d2bc' : '#8a8fa6');
+    const limb = (pts, col, w) => { c.strokeStyle = col; c.lineWidth = (skel ? 1.6 : w) * s; c.lineCap = 'round'; c.lineJoin = 'round'; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); c.stroke(); };
+    limb([hip, kB, fB], dark, 4.5);
+    if (!skel) { c.fillStyle = tint || '#3a2a1a'; c.fillRect(fB[0] - 3 * s, fB[1] - 2 * s, 6 * s, 3 * s); }
+    limb([sh, eB, hB], dark, 4);
+    // torso + surcoat
+    limb([hip, sh], armor, 8);
+    if (!skel && !tint) {
+      c.strokeStyle = '#2a5ad8'; c.lineWidth = 6 * s; c.beginPath(); c.moveTo(hip[0], hip[1] + 3 * s); c.lineTo(lerp(hip[0], sh[0], 0.8), lerp(hip[1], sh[1], 0.8)); c.stroke();
+      c.fillStyle = '#ffd21e'; c.beginPath(); c.arc(lerp(hip[0], sh[0], 0.5), lerp(hip[1], sh[1], 0.5), 1.5 * s, 0, 7); c.fill();
+    }
+    if (skel) { c.strokeStyle = armor; c.lineWidth = 1 * s; for (let k = 0.3; k < 0.9; k += 0.2) { const px = lerp(hip[0], sh[0], k), py = lerp(hip[1], sh[1], k); c.beginPath(); c.moveTo(px - 3 * s, py); c.lineTo(px + 3 * s, py); c.stroke(); } }
+    // head
+    c.fillStyle = armor; c.beginPath(); c.arc(head[0], head[1], 4.8 * s, 0, 7); c.fill();
+    if (skel) { c.fillStyle = '#000'; c.fillRect(head[0] + f * 1 * s - 1, head[1] - 1.5 * s, 2 * s, 2 * s); c.fillRect(head[0] - f * 2 * s - 1, head[1] - 1.5 * s, 2 * s, 2 * s); }
+    else if (!tint) {
+      c.fillStyle = '#1a1a24'; c.fillRect(head[0] + (f > 0 ? 0 : -4.5 * s), head[1] - 1 * s, 4.5 * s, 1.6 * s);
+      c.strokeStyle = '#e02828'; c.lineWidth = 2.5 * s; c.beginPath(); c.moveTo(head[0], head[1] - 4.5 * s);
+      c.quadraticCurveTo(head[0] - f * 6 * s, head[1] - 10 * s, head[0] - f * 11 * s, head[1] - 3 * s + Math.sin((o.t || 0) * 12) * 1.2 * s); c.stroke();
+    }
+    limb([hip, kF, fF], armor, 4.5);
+    if (!skel) { c.fillStyle = tint || '#3a2a1a'; c.fillRect(fF[0] - 3 * s, fF[1] - 2 * s, 6 * s, 3 * s); }
+    // sword
+    if (!o.noSword && !skel) {
+      const tip = [hF[0] + Math.sin(P.sw * R) * 17 * f * s, hF[1] + Math.cos(P.sw * R) * 17 * s];
+      c.strokeStyle = o.magic ? '#8ff8ff' : (tint || '#e8ecf4'); c.lineWidth = 2 * s; c.beginPath(); c.moveTo(hF[0], hF[1]); c.lineTo(tip[0], tip[1]); c.stroke();
+      if (o.magic) { c.strokeStyle = 'rgba(140,248,255,.35)'; c.lineWidth = 6 * s; c.stroke(); }
+      c.strokeStyle = tint || '#c8962a'; c.lineWidth = 2 * s; const cx = Math.cos(P.sw * R) * 3 * f * s, cy = -Math.sin(P.sw * R) * 3 * s;
+      c.beginPath(); c.moveTo(hF[0] + cx, hF[1] + cy); c.lineTo(hF[0] - cx, hF[1] - cy); c.stroke();
+    }
+    limb([sh, eF, hF], armor, 4);
+    c.restore();
+  }
+
+  // ---------- scenery helpers ----------
+  const cache = {};
+  function bricks(key, w, h, base, mortar, bw, bh) {
+    if (cache[key]) return cache[key];
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const c = cv.getContext('2d');
+    c.fillStyle = mortar; c.fillRect(0, 0, w, h);
+    let r = 7;
+    for (let y = 0; y < h; y += bh) for (let x = -((y / bh) % 2) * bw / 2; x < w; x += bw) {
+      r = (r * 9301 + 49297) % 233280; const v = r / 233280;
+      c.fillStyle = shade(base, (v - 0.5) * 0.25); c.fillRect(x + 1, y + 1, bw - 2, bh - 2);
+    }
+    return (cache[key] = cv);
+  }
+  function shade(hex, k) {
+    const n = parseInt(hex.slice(1), 16);
+    const ch = s => Math.max(0, Math.min(255, Math.round(((n >> s) & 255) * (1 + k))));
+    return 'rgb(' + ch(16) + ',' + ch(8) + ',' + ch(0) + ')';
+  }
+  function torch(c, x, y, t) {
+    c.fillStyle = '#5a3a1a'; c.fillRect(x - 2, y, 4, 12);
+    const f = Math.sin(t * 20 + x) * 1.5;
+    const g = c.createRadialGradient(x, y - 4, 1, x, y - 4, 40); g.addColorStop(0, 'rgba(255,190,90,.35)'); g.addColorStop(1, 'rgba(255,190,90,0)');
+    c.fillStyle = g; c.fillRect(x - 40, y - 44, 80, 80);
+    c.fillStyle = '#ff7a1a'; c.beginPath(); c.moveTo(x - 4, y); c.quadraticCurveTo(x - 4 + f, y - 10, x, y - 13 - f); c.quadraticCurveTo(x + 4, y - 8, x + 4, y); c.fill();
+    c.fillStyle = '#ffe04a'; c.beginPath(); c.ellipse(x, y - 3, 2, 4, 0, 0, 7); c.fill();
+  }
+  function flames(c, x1, x2, y, t, h) {
+    for (let x = x1; x < x2; x += 7) {
+      const k = Math.sin(t * 9 + x * 0.7) * 0.5 + 0.5, hh = (h || 18) * (0.6 + k * 0.6);
+      c.fillStyle = '#ff5a1a'; c.beginPath(); c.moveTo(x - 5, y); c.quadraticCurveTo(x - 3, y - hh * 0.6, x + Math.sin(t * 7 + x) * 2, y - hh); c.quadraticCurveTo(x + 3, y - hh * 0.5, x + 5, y); c.fill();
+      c.fillStyle = '#ffd24a'; c.beginPath(); c.moveTo(x - 2.5, y); c.quadraticCurveTo(x, y - hh * 0.5, x + 2.5, y); c.fill();
+    }
+  }
+  function sky(c, top, bot, h) { const g = c.createLinearGradient(0, 0, 0, h || H); g.addColorStop(0, top); g.addColorStop(1, bot); c.fillStyle = g; c.fillRect(0, 0, W, h || H); }
+  function glow(c, on, fn) { if (!on) return fn(); c.save(); c.shadowColor = '#fff27a'; c.shadowBlur = 12; fn(); c.restore(); }
+  function rock(c, x, y, r, col) {
+    c.fillStyle = col || '#6a6070'; c.beginPath();
+    for (let k = 0; k < 9; k++) { const a = k / 9 * Math.PI * 2, rr = r * (0.8 + ((k * 37) % 7) / 25); c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+    c.fill(); c.fillStyle = 'rgba(255,255,255,.18)'; c.beginPath(); c.arc(x - r * 0.3, y - r * 0.3, r * 0.35, 0, 7); c.fill();
+  }
+  function bat(c, x, y, t, s) {
+    s = s || 1; const flap = Math.sin(t * 22) * 5 * s;
+    c.fillStyle = '#2a1a3a'; c.beginPath(); c.moveTo(x, y); c.lineTo(x - 11 * s, y - flap); c.lineTo(x - 6 * s, y + 2 * s); c.lineTo(x - 3 * s, y); c.lineTo(x, y + 3 * s); c.lineTo(x + 3 * s, y); c.lineTo(x + 6 * s, y + 2 * s); c.lineTo(x + 11 * s, y - flap); c.fill();
+    c.fillStyle = '#ff3030'; c.fillRect(x - 2 * s, y - 1 * s, 1.5 * s, 1.5 * s); c.fillRect(x + 1 * s, y - 1 * s, 1.5 * s, 1.5 * s);
+  }
+
+  // ---------- rooms ----------
+  // A room is a list of beats. Each beat: knight moves to `at` (lead), the
+  // danger shows and the right move flashes (cue); hit it in time and the
+  // knight performs `act` to `to`. Miss it, or press the wrong thing, and
+  // `death` plays.
+  const ROOMS = [];
+
+  ROOMS.push({
+    name: 'THE DRAWBRIDGE', music: 'knight-halls', start: [20, FLOOR],
+    beats: [
+      { lead: 1.6, at: [120, FLOOR], cue: 'up', act: 'dash', to: [196, FLOOR], death: 'fall' },
+      { lead: 0.3, at: [196, FLOOR], cue: 'sword', act: 'swing', to: [196, FLOOR], death: 'fall' },
+      { lead: 0.4, at: [200, FLOOR], cue: 'up', act: 'dash', to: [300, FLOOR], death: 'crush' },
+    ],
+    draw(c, s) {
+      sky(c, '#0a0e2a', '#2a2050', FLOOR);
+      c.fillStyle = '#fff'; for (let i = 0; i < 30; i++) c.fillRect((i * 97) % W, (i * 53) % 110, 1, 1);
+      c.fillStyle = '#e8e4c8'; c.beginPath(); c.arc(60, 40, 14, 0, 7); c.fill();
+      c.drawImage(bricks('castle', 90, 190, '#6a6478', '#3a3648', 16, 8), 230, 0);
+      for (let x = 230; x < 320; x += 16) { c.fillStyle = '#6a6478'; c.fillRect(x, -2, 10, 10); }
+      c.fillStyle = '#0a0810'; c.beginPath(); c.moveTo(250, FLOOR); c.lineTo(250, 120); c.quadraticCurveTo(275, 96, 300, 120); c.lineTo(300, FLOOR); c.fill();
+      torch(c, 240, 110, s.t); torch(c, 310, 110, s.t);
+      // portcullis
+      const drop = s.beat === 2 ? (s.phase === 'cue' ? s.pt * 0.6 : s.phase === 'death' ? 1 : 0) : 0;
+      glow(c, s.beat === 2 && s.phase === 'cue' && s.flash, () => { c.fillStyle = '#3a3a44'; for (let x = 252; x < 300; x += 7) c.fillRect(x, 100, 2, 20 + drop * 70); c.fillRect(250, 112 + drop * 70, 50, 2); });
+      // moat
+      const g = c.createLinearGradient(0, FLOOR, 0, H); g.addColorStop(0, '#1a3a6a'); g.addColorStop(1, '#081830'); c.fillStyle = g; c.fillRect(0, FLOOR, W, H - FLOOR);
+      c.fillStyle = '#2d5a8a'; for (let x = 0; x < W; x += 12) c.fillRect((x + s.t * 8) % W, FLOOR + 10 + (x % 3) * 6, 6, 1);
+      c.fillStyle = '#3a4a2a'; c.fillRect(0, FLOOR, 60, H - FLOOR); c.fillRect(230, FLOOR, 90, H - FLOOR);
+      // bridge planks: they fall away behind the knight during the first cue
+      const fallN = s.beat === 0 ? (s.phase === 'cue' ? Math.floor(s.pt * 9) : s.phase === 'death' ? 12 : 0) : (s.beat > 0 ? 12 : 0);
+      for (let i = 0; i < 12; i++) {
+        const x = 60 + i * 14.2;
+        let dy = 0; if (i < fallN && s.beat === 0) dy = (s.phase === 'death' ? s.pt * 60 : 0) + (fallN - i) * 3;
+        if (s.beat > 0 && i < 7) continue;
+        glow(c, s.beat === 0 && s.phase === 'cue' && s.flash && i < fallN + 2, () => { c.fillStyle = i % 2 ? '#8a5a2a' : '#7a4e22'; c.fillRect(x, FLOOR - 2 + dy, 13, 6); });
+      }
+      c.strokeStyle = '#3a2a1a'; c.lineWidth = 1; c.beginPath(); c.moveTo(60, FLOOR - 2); c.lineTo(250, 110); c.stroke();
+      // tentacle
+      if (s.beat === 1 && s.phase !== 'lead') {
+        const cut = s.phase === 'act';
+        const rise = cut ? 1 - s.pt : s.phase === 'death' ? 1 : clamp01(s.pt * 2);
+        glow(c, s.phase === 'cue' && s.flash, () => {
+          c.strokeStyle = '#3a8a4a'; c.lineWidth = 7; c.lineCap = 'round'; c.beginPath(); c.moveTo(220, H);
+          const tipX = s.phase === 'death' ? lerp(214, 196, s.pt) : 214 + Math.sin(s.t * 6) * 6, tipY = H - rise * 70;
+          c.quadraticCurveTo(236, H - 30, tipX, tipY); c.stroke();
+          c.fillStyle = '#9ad86a'; for (let k = 0; k < 5; k++) c.fillRect(lerp(220, tipX, k / 5) - 1, lerp(H, tipY, k / 5), 3, 2);
+        });
+      }
+    },
+  });
+
+  ROOMS.push({
+    name: 'THE CRUMBLING HALL', music: 'knight-halls', start: [300, FLOOR], face: -1,
+    beats: [
+      { lead: 1.4, at: [180, FLOOR], cue: 'left', act: 'dash', to: [112, FLOOR], death: 'fall' },
+      { lead: 0.2, at: [112, FLOOR], cue: 'right', act: 'hop', to: [150, FLOOR], death: 'crush' },
+      { lead: 0.5, at: [150, FLOOR], cue: 'left', act: 'dash', to: [20, FLOOR], death: 'fall' },
+    ],
+    draw(c, s) {
+      c.drawImage(bricks('hall', W, FLOOR, '#5a4a5a', '#2a2030', 20, 10), 0, 0);
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(0, 0, W, FLOOR);
+      for (const x of [70, 250]) torch(c, x, 80, s.t);
+      c.fillStyle = '#100a14'; c.fillRect(8, 110, 32, 80); c.fillRect(280, 110, 32, 80);
+      glow(c, s.beat === 2 && s.phase === 'cue' && s.flash, () => { c.strokeStyle = '#8a7a6a'; c.lineWidth = 3; c.strokeRect(8, 110, 32, 80); });
+      // floor collapses from the right
+      const gone = s.beat === 0 ? (s.phase === 'cue' ? s.pt * 140 : s.phase === 'death' ? 190 : s.phase === 'act' ? 140 + s.pt * 40 : 0) : s.beat === 2 ? 180 + (s.phase === 'cue' ? s.pt * 90 : s.phase === 'death' ? 150 : 100) : 180;
+      const edge = W - gone;
+      c.fillStyle = '#000'; c.fillRect(0, FLOOR, W, H - FLOOR);
+      for (let x = 0; x < W; x += 16) {
+        if (x > edge) { const k = (x - edge) / 30; c.fillStyle = '#4a3e3a'; c.fillRect(x, FLOOR + k * 14 + (s.t * 40 % 10), 15, 8); continue; }
+        c.fillStyle = (x / 16) % 2 ? '#6a5a50' : '#5e5048'; c.fillRect(x, FLOOR, 15, 10);
+      }
+      glow(c, s.beat === 0 && s.phase === 'cue' && s.flash, () => { c.fillStyle = '#fff4'; c.fillRect(edge - 4, FLOOR, 4, 10); });
+      // falling ceiling stones
+      if (s.beat === 1) {
+        const y = s.phase === 'cue' ? lerp(-20, 150, s.pt) : s.phase === 'act' ? lerp(150, FLOOR - 12, s.pt) : s.phase === 'death' ? FLOOR - 12 : -30;
+        glow(c, s.phase === 'cue' && s.flash, () => rock(c, 110, y, 14, '#7a6a6a'));
+      }
+    },
+  });
+
+  function ropeAngle(i, t) { return Math.sin(t * 2.4 + i * 1.3) * 0.45; }
+  function ropeEnd(i, t) { const px = 110 + i * 50, a = ropeAngle(i, t); return [px + Math.sin(a) * 100, 18 + Math.cos(a) * 100]; }
+  ROOMS.push({
+    name: 'THE FIRE ROPES', music: 'knight-halls', start: [20, 170],
+    beats: [
+      { lead: 1.0, at: [44, 170], cue: 'up', act: 'rope', rope: 0, death: 'fall' },
+      { lead: 0.1, at: 'rope0', cue: 'up', act: 'rope', rope: 1, death: 'fall' },
+      { lead: 0.1, at: 'rope1', cue: 'up', act: 'rope', rope: 2, death: 'fall' },
+      { lead: 0.1, at: 'rope2', cue: 'right', act: 'jump', to: [292, 170], death: 'fall' },
+    ],
+    draw(c, s) {
+      sky(c, '#1a0806', '#4a1a0a');
+      c.fillStyle = '#2a120a'; for (let x = 0; x < W; x += 24) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x + 12, 20 + (x % 5) * 4); c.lineTo(x + 24, 0); c.fill(); }
+      const g = c.createLinearGradient(0, 160, 0, H); g.addColorStop(0, '#ff7a1a'); g.addColorStop(1, '#6a0a00'); c.fillStyle = g; c.fillRect(60, 190, 210, H - 190);
+      flames(c, 64, 268, 196, s.t, 26);
+      c.fillStyle = '#3a2a24'; c.fillRect(0, 170, 62, H - 170); c.fillRect(268, 170, 52, H - 170);
+      c.fillStyle = '#5a4238'; c.fillRect(0, 170, 62, 4); c.fillRect(268, 170, 52, 4);
+      glow(c, s.beat === 3 && s.phase === 'cue' && s.flash, () => { c.fillStyle = '#7a6258'; c.fillRect(268, 170, 52, 4); });
+      for (let i = 0; i < 3; i++) {
+        const [ex, ey] = ropeEnd(i, s.t);
+        glow(c, s.phase === 'cue' && s.flash && s.beat === i, () => { c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.beginPath(); c.moveTo(110 + i * 50, 18); c.lineTo(ex, ey); c.stroke(); });
+        c.fillStyle = '#6a4a2a'; c.fillRect(106 + i * 50, 12, 8, 6);
+      }
+    },
+  });
+
+  ROOMS.push({
+    name: 'THE BAT CAVERN', music: 'knight-deep', start: [20, FLOOR],
+    beats: [
+      { lead: 1.4, at: [110, FLOOR], cue: 'sword', act: 'swing', to: [110, FLOOR], death: 'skeleton' },
+      { lead: 0.4, at: [120, FLOOR], cue: 'down', act: 'duck', to: [120, FLOOR], death: 'skeleton' },
+      { lead: 0.6, at: [170, FLOOR], cue: 'sword', act: 'swing', to: [170, FLOOR], death: 'skeleton' },
+      { lead: 0.3, at: [180, FLOOR], cue: 'right', act: 'dash', to: [310, FLOOR], death: 'skeleton' },
+    ],
+    draw(c, s) {
+      sky(c, '#0a0614', '#241634');
+      c.fillStyle = '#1a1024'; for (let x = 0; x < W; x += 18) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x + 9, 26 + (x * 7) % 30); c.lineTo(x + 18, 0); c.fill(); }
+      c.fillStyle = '#2a1e36'; c.fillRect(0, FLOOR, W, H - FLOOR);
+      for (let x = 0; x < W; x += 30) { c.fillStyle = '#3a2c48'; c.beginPath(); c.arc(x + 10, FLOOR + 6, 12, Math.PI, 0); c.fill(); }
+      c.fillStyle = '#080410'; c.fillRect(290, 120, 30, 70);
+      glow(c, s.beat === 3 && s.phase === 'cue' && s.flash, () => { c.strokeStyle = '#5a4a6a'; c.lineWidth = 3; c.strokeRect(290, 120, 32, 70); });
+      const flash = s.phase === 'cue' && s.flash;
+      if (s.beat === 0 && s.phase !== 'lead') {
+        for (let k = 0; k < 7; k++) {
+          const dead = s.phase === 'act' && s.pt > 0.3;
+          const x = s.phase === 'death' ? 116 + Math.sin(s.t * 20 + k) * 10 : lerp(330 + k * 12, 150 + k * 6, s.phase === 'cue' ? s.pt : 1);
+          const y = 130 + Math.sin(s.t * 8 + k * 2) * 12 + (dead ? s.pt * 80 : 0);
+          glow(c, flash, () => bat(c, x, y + k * 3, s.t + k, 1.2));
+        }
+      }
+      if (s.beat === 1 && s.phase !== 'lead') {
+        for (let k = 0; k < 5; k++) {
+          const p = s.phase === 'cue' ? s.pt : s.phase === 'act' ? 1 + s.pt : 0.9;
+          const x = lerp(20 + k * 60, 330, clamp01(p - 1)) + (p < 1 ? 0 : 0), y = lerp(10, 150, Math.min(1, p)) - (p > 1 ? (p - 1) * 150 : 0);
+          glow(c, flash, () => bat(c, x, y, s.t + k, 1));
+        }
+      }
+      if (s.beat === 2 && s.phase !== 'lead') {
+        const dead = s.phase === 'act' && s.pt > 0.3;
+        const x = s.phase === 'death' ? 175 : lerp(330, 205, s.phase === 'cue' ? s.pt : 1);
+        glow(c, flash, () => bat(c, x, 150 + Math.sin(s.t * 6) * 6 + (dead ? s.pt * 60 : 0), s.t, 3.2));
+      }
+    },
+  });
+
+  ROOMS.push({
+    name: 'THE ROLLING STONE', music: 'knight-deep', start: [60, FLOOR],
+    beats: [
+      { lead: 0.9, at: [80, FLOOR], cue: 'right', act: 'dash', to: [170, FLOOR], death: 'crush' },
+      { lead: 0.1, at: [178, FLOOR], cue: 'up', act: 'jump', to: [248, FLOOR], death: 'fall' },
+      { lead: 0.1, at: [252, FLOOR], cue: 'up', act: 'hide', to: [270, FLOOR - 16], death: 'crush' },
+    ],
+    draw(c, s) {
+      c.drawImage(bricks('corr', W, FLOOR, '#4a4a3a', '#262618', 24, 12), 0, 0);
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(0, 0, W, FLOOR);
+      torch(c, 130, 70, s.t); torch(c, 230, 70, s.t);
+      c.fillStyle = '#12120a'; c.fillRect(256, 110, 32, 64);
+      glow(c, s.beat === 2 && s.phase === 'cue' && s.flash, () => { c.strokeStyle = '#8a8a6a'; c.lineWidth = 3; c.strokeRect(256, 110, 32, 64); });
+      c.fillStyle = '#3a3a2a'; c.fillRect(0, FLOOR, 190, H - FLOOR); c.fillRect(238, FLOOR, W - 238, H - FLOOR);
+      c.fillStyle = '#000'; c.fillRect(190, FLOOR, 48, H - FLOOR);
+      glow(c, s.beat === 1 && s.phase === 'cue' && s.flash, () => { c.fillStyle = '#5a5a44'; c.fillRect(186, FLOOR, 4, 6); c.fillRect(238, FLOOR, 4, 6); });
+      // the boulder chases the knight the whole room
+      let bx;
+      const kx = s.kx;
+      if (s.beat === 0) bx = s.phase === 'lead' ? -40 : s.phase === 'cue' ? lerp(-30, 40, s.pt) : s.phase === 'death' ? Math.min(kx, lerp(40, 110, s.pt * 3)) : lerp(40, 120, s.pt);
+      else if (s.beat === 1) bx = s.phase === 'death' ? 150 : lerp(120, 150, s.phase === 'cue' ? s.pt : 1);
+      else bx = s.phase === 'act' ? lerp(170, 360, s.pt) : s.phase === 'death' ? lerp(190, 250, Math.min(1, s.pt * 3)) : lerp(160, 210, s.phase === 'cue' ? s.pt : 0);
+      if (s.beat === 1 && s.phase === 'act') bx = lerp(150, 180, s.pt);
+      const r = 30;
+      c.save(); c.translate(bx, FLOOR - r); c.rotate(bx / r);
+      c.fillStyle = '#7a7060'; c.beginPath(); c.arc(0, 0, r, 0, 7); c.fill();
+      c.fillStyle = '#5a5244'; c.fillRect(-r * 0.7, -3, r * 1.4, 6); c.fillRect(-3, -r * 0.7, 6, r * 1.4);
+      c.restore();
+    },
+  });
+
+  ROOMS.push({
+    name: 'THE LAVA RIVER', music: 'knight-deep', start: [150, 176], raft: true,
+    beats: [
+      { lead: 1.2, at: [150, 176], cue: 'up', act: 'jump', to: [150, 176], death: 'burn', obst: 'rock' },
+      { lead: 0.6, at: [150, 176], cue: 'down', act: 'duck', to: [150, 176], death: 'crush', obst: 'arch' },
+      { lead: 0.6, at: [150, 176], cue: 'up', act: 'jump', to: [150, 176], death: 'burn', obst: 'geyser' },
+      { lead: 0.6, at: [150, 176], cue: 'right', act: 'jump', to: [270, 160], death: 'burn', obst: 'shore' },
+    ],
+    draw(c, s) {
+      sky(c, '#1a0604', '#5a1606');
+      c.fillStyle = '#2a0a06'; c.fillRect(0, 0, W, 34); for (let x = 0; x < W; x += 20) { c.beginPath(); c.moveTo(x - ((s.t * 40) % 20), 34); c.lineTo(x + 10 - ((s.t * 40) % 20), 50); c.lineTo(x + 20 - ((s.t * 40) % 20), 34); c.fill(); }
+      const g = c.createLinearGradient(0, 176, 0, H); g.addColorStop(0, '#ffb02a'); g.addColorStop(0.3, '#ff5a0a'); g.addColorStop(1, '#8a1000'); c.fillStyle = g; c.fillRect(0, 178, W, H - 178);
+      c.fillStyle = '#ffe07a'; for (let k = 0; k < 16; k++) c.fillRect(((k * 53 - s.t * 90) % W + W) % W, 184 + (k % 4) * 9, 10, 1.5);
+      // raft
+      c.fillStyle = '#6a4222'; c.fillRect(120, 176, 70, 7); c.fillStyle = '#4a2a14'; for (let x = 124; x < 190; x += 10) c.fillRect(x, 176, 2, 7);
+      const flash = s.phase === 'cue' && s.flash;
+      const ob = s.beat_obst;
+      // obstacles come in from the right
+      const ox = s.phase === 'lead' ? lerp(360, 250, s.pt) : s.phase === 'cue' ? lerp(250, 178, s.pt) : s.phase === 'act' ? lerp(178, 60, s.pt) : 160;
+      glow(c, flash, () => {
+        if (ob === 'rock') { rock(c, ox, 172, 12, '#3a2a2a'); }
+        else if (ob === 'arch') { c.fillStyle = '#3a2420'; c.fillRect(ox - 10, 34, 24, 106); rock(c, ox + 2, 140, 13, '#4a2e28'); }
+        else if (ob === 'geyser') { c.fillStyle = '#ffd24a'; const h = s.phase === 'cue' ? s.pt * 50 : 50; c.fillRect(ox - 4, 178 - h, 8, h); flames(c, ox - 6, ox + 8, 178 - h + 4, s.t, 12); }
+        else if (ob === 'shore') { const sx = s.phase === 'act' ? 250 : ox + 60; c.fillStyle = '#3a2a24'; c.fillRect(sx, 160, W, H); c.fillStyle = '#5a4238'; c.fillRect(sx, 160, W, 4); }
+      });
+    },
+  });
+
+  function goblin(c, x, y, pose, t) {
+    const face = -1;
+    c.save(); c.translate(x, y);
+    const bob = Math.sin(t * 6) * 1.5;
+    c.fillStyle = '#2a6a2a'; c.fillRect(-12, -14, 9, 14); c.fillRect(3, -14, 9, 14);
+    c.fillStyle = '#6a2a8a'; c.beginPath(); c.ellipse(0, -30 + bob, 17, 18, 0, 0, 7); c.fill();
+    c.fillStyle = '#3aa03a'; c.beginPath(); c.arc(0, -52 + bob, 11, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(-10, -54 + bob); c.lineTo(-20, -60 + bob); c.lineTo(-9, -49 + bob); c.fill(); c.beginPath(); c.moveTo(10, -54 + bob); c.lineTo(20, -60 + bob); c.lineTo(9, -49 + bob); c.fill();
+    c.fillStyle = '#ffd21e'; c.beginPath(); c.moveTo(-9, -60 + bob); c.lineTo(-9, -70 + bob); c.lineTo(-4, -64 + bob); c.lineTo(0, -72 + bob); c.lineTo(4, -64 + bob); c.lineTo(9, -70 + bob); c.lineTo(9, -60 + bob); c.fill();
+    c.fillStyle = '#ff2020'; c.fillRect(-6, -54 + bob, 3, 3); c.fillRect(3, -54 + bob, 3, 3);
+    c.fillStyle = '#fff'; c.fillRect(-5, -46 + bob, 10, 2);
+    // club arm
+    const ang = pose === 'raise' ? -2.4 : pose === 'swing' ? 0.2 : -1;
+    c.save(); c.translate(face * 12, -36 + bob); c.rotate(ang * face);
+    c.fillStyle = '#3aa03a'; c.fillRect(-3, 0, 6, 14); c.fillStyle = '#6a4a2a'; c.fillRect(-4, 12, 8, 22); c.beginPath(); c.arc(0, 36, 7, 0, 7); c.fill();
+    c.restore(); c.restore();
+  }
+  ROOMS.push({
+    name: 'THE GOBLIN KING', music: 'knight-deep', start: [20, FLOOR],
+    beats: [
+      { lead: 1.2, at: [120, FLOOR], cue: 'down', act: 'duck', to: [120, FLOOR], death: 'crush' },
+      { lead: 0.1, at: [124, FLOOR], cue: 'sword', act: 'swing', to: [124, FLOOR], death: 'crush' },
+      { lead: 0.3, at: [124, FLOOR], cue: 'left', act: 'hop', to: [80, FLOOR], death: 'crush' },
+      { lead: 0.2, at: [84, FLOOR], cue: 'sword', act: 'swing', to: [84, FLOOR], death: 'crush' },
+    ],
+    draw(c, s) {
+      c.drawImage(bricks('throne', W, FLOOR, '#4a3a2a', '#221810', 22, 11), 0, 0);
+      c.fillStyle = 'rgba(40,0,40,.35)'; c.fillRect(0, 0, W, FLOOR);
+      c.fillStyle = '#8a1a2a'; c.fillRect(140, 40, 60, FLOOR - 40); c.fillStyle = '#ffd21e'; c.fillRect(140, 40, 60, 3);
+      c.fillStyle = '#5a3a1a'; c.fillRect(260, 90, 40, 100); c.fillStyle = '#ffd21e'; c.fillRect(262, 86, 36, 6);
+      torch(c, 40, 80, s.t); torch(c, 240, 80, s.t);
+      c.fillStyle = '#3a2a1e'; c.fillRect(0, FLOOR, W, H - FLOOR);
+      for (let x = 0; x < W; x += 20) { c.fillStyle = '#4a3828'; c.fillRect(x, FLOOR, 19, 4); }
+      let gx = 280, pose = 'idle';
+      const flash = s.phase === 'cue' && s.flash;
+      if (s.beat === 0) { gx = s.phase === 'lead' ? 280 : s.phase === 'cue' ? lerp(280, 158, s.pt) : 158; pose = s.phase === 'cue' ? 'raise' : 'swing'; }
+      else if (s.beat === 1) { gx = 158; pose = s.phase === 'death' ? 'swing' : 'raise'; }
+      else if (s.beat === 2) { gx = s.phase === 'cue' ? lerp(170, 140, s.pt) : s.phase === 'act' ? 124 : 128; pose = s.phase === 'cue' ? 'raise' : 'swing'; }
+      else { gx = s.phase === 'act' ? 116 : 116; pose = s.phase === 'death' ? 'swing' : 'raise'; }
+      const hurt = s.beat === 1 && s.phase === 'act';
+      const dead = s.beat === 3 && s.phase === 'act';
+      c.save();
+      if (dead) { c.globalAlpha = 1 - s.pt; c.translate(gx, FLOOR); c.rotate(s.pt * 1.4); c.translate(-gx, -FLOOR); }
+      if (hurt && Math.floor(s.t * 20) % 2) c.globalAlpha = 0.4;
+      glow(c, flash, () => goblin(c, gx, FLOOR, pose, s.t));
+      c.restore();
+    },
+  });
+
+  function dragon(c, s, st) {
+    // st: { head:[x,y], mouth(0..1), fire(0..1), dying(0..1), sleep }
+    c.save();
+    const d = st.dying || 0;
+    if (d) { c.translate(0, d * 30); }
+    const body = '#2a6a3a', belly = '#c8b86a', dark = '#1a4a2a';
+    // wing
+    c.fillStyle = '#1a3a2a'; c.beginPath(); c.moveTo(250, 120); c.lineTo(200, 40 + Math.sin(s.t * 2) * 6); c.lineTo(236, 70); c.lineTo(260, 30 + Math.sin(s.t * 2) * 6); c.lineTo(280, 90); c.fill();
+    // body and tail
+    c.fillStyle = body; c.beginPath(); c.ellipse(262, 150, 56, 36, 0, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(300, 170); c.quadraticCurveTo(340, 150, 320, 110); c.lineTo(330, 112); c.quadraticCurveTo(346, 160, 306, 186); c.fill();
+    c.fillStyle = belly; c.beginPath(); c.ellipse(248, 160, 34, 22, 0, 0, 7); c.fill();
+    c.fillStyle = dark; for (let k = 0; k < 5; k++) c.fillRect(230 + k * 8, 142, 2, 34);
+    // legs
+    c.fillStyle = body; c.fillRect(222, 168, 18, 22); c.fillRect(280, 168, 18, 22);
+    c.fillStyle = '#eee'; for (const x of [222, 280]) for (let k = 0; k < 3; k++) { c.beginPath(); c.moveTo(x + k * 6, 190); c.lineTo(x + k * 6 - 3, 194); c.lineTo(x + k * 6 + 3, 190); c.fill(); }
+    // neck + head
+    const [hx, hy] = st.head;
+    c.strokeStyle = body; c.lineWidth = 16; c.lineCap = 'round'; c.beginPath(); c.moveTo(232, 136); c.quadraticCurveTo(222, hy + 20, hx + 10, hy); c.stroke();
+    glow(c, st.flashNeck, () => { c.strokeStyle = belly; c.lineWidth = 6; c.beginPath(); c.moveTo(228, 140); c.quadraticCurveTo(216, hy + 24, hx + 8, hy + 6); c.stroke(); });
+    c.fillStyle = body; c.beginPath(); c.ellipse(hx, hy, 20, 11, -0.1, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(hx + 8, hy - 8); c.lineTo(hx + 22, hy - 22); c.lineTo(hx + 14, hy - 6); c.fill();
+    const m = st.mouth || 0;
+    c.fillStyle = '#5a0a0a'; c.beginPath(); c.moveTo(hx - 18, hy + 2); c.lineTo(hx - 2, hy + 1); c.lineTo(hx - 18, hy + 2 + m * 12); c.fill();
+    c.fillStyle = body; c.beginPath(); c.ellipse(hx - 6, hy + 5 + m * 8, 13, 4, 0.2 + m * 0.3, 0, 7); c.fill();
+    c.fillStyle = st.sleep ? '#1a4a2a' : '#ffe04a'; c.fillRect(hx - 6, hy - 5, 5, st.sleep ? 1 : 3);
+    if (st.sleep) { c.fillStyle = '#fff'; c.font = '8px "Press Start 2P"'; c.fillText('z', hx + 10, hy - 20 - (s.t * 10 % 10)); }
+    // fire breath
+    if (st.fire > 0) {
+      const len = st.fire * (st.fireLen || 150);
+      for (let k = 0; k < 16; k++) {
+        const p = k / 16, x = hx - 18 - p * len, y = hy + 6 + Math.sin(s.t * 30 + k) * 3 + p * (st.fireDrop || 40);
+        c.fillStyle = k % 2 ? '#ffd24a' : '#ff5a1a'; c.beginPath(); c.arc(x, y, 4 + p * 10, 0, 7); c.fill();
+      }
+    }
+    c.restore();
+  }
+  ROOMS.push({
+    name: "THE DRAGON'S LAIR", music: 'knight-dragon', start: [10, FLOOR], final: true,
+    beats: [
+      { lead: 1.8, at: [100, FLOOR], cue: 'left', act: 'dash', to: [56, FLOOR], death: 'burn', hideAfter: true },
+      { lead: 0.6, at: [56, FLOOR], cue: 'right', act: 'dash', to: [150, FLOOR], death: 'burn', grab: true },
+      { lead: 0.2, at: [150, FLOOR], cue: 'down', act: 'duck', to: [150, FLOOR], death: 'crush' },
+      { lead: 0.3, at: [156, FLOOR], cue: 'sword', act: 'slay', to: [156, FLOOR], death: 'burn' },
+    ],
+    draw(c, s) {
+      sky(c, '#140a1a', '#3a1a2a');
+      c.fillStyle = '#241424'; for (let x = 0; x < W; x += 22) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x + 11, 24 + (x * 13) % 26); c.lineTo(x + 22, 0); c.fill(); }
+      // gold hoard
+      c.fillStyle = '#c89a1a'; c.beginPath(); c.moveTo(170, FLOOR); c.quadraticCurveTo(250, 150, 330, FLOOR); c.fill();
+      c.fillStyle = '#ffd24a'; for (let k = 0; k < 40; k++) c.fillRect(180 + (k * 37) % 140, FLOOR - 4 - (k * 13) % 26 * ((k * 37) % 140 > 30 && (k * 37) % 140 < 110 ? 1 : 0.3), 3, 2);
+      // princess in a crystal
+      const freed = s.freed || 0;
+      c.fillStyle = `rgba(160,220,255,${0.5 * (1 - freed)})`; c.beginPath(); c.moveTo(40, 60); c.lineTo(60, 40); c.lineTo(80, 60); c.lineTo(76, 110); c.lineTo(44, 110); c.fill();
+      c.fillStyle = '#ff5cb8'; c.beginPath(); c.moveTo(52, 104); c.lineTo(60, 70); c.lineTo(68, 104); c.fill();
+      c.fillStyle = '#ffd21e'; c.beginPath(); c.arc(60, 64, 6, 0, 7); c.fill(); c.fillStyle = '#ffb98a'; c.beginPath(); c.arc(60, 66, 4, 0, 7); c.fill();
+      c.fillStyle = '#3a2a3a'; c.fillRect(30, 110, 60, 80);
+      // pillar to hide behind
+      glow(c, s.beat === 0 && s.phase === 'cue' && s.flash, () => { c.fillStyle = '#5a4a5a'; c.fillRect(40, 110, 20, 80); c.fillStyle = '#6a5a6a'; c.fillRect(36, 106, 28, 6); });
+      // the magic sword in its stone
+      const took = s.beat > 1 || (s.beat === 1 && s.phase === 'act' && s.pt > 0.8);
+      c.fillStyle = '#6a6070'; c.fillRect(140, 176, 26, 14);
+      if (!took) glow(c, (s.beat === 1 && s.phase === 'cue' && s.flash) || true, () => { c.strokeStyle = '#8ff8ff'; c.lineWidth = 2; c.beginPath(); c.moveTo(153, 176); c.lineTo(153, 150); c.stroke(); c.strokeStyle = '#c8962a'; c.beginPath(); c.moveTo(148, 156); c.lineTo(158, 156); c.stroke(); });
+      c.fillStyle = '#2a1a2a'; c.fillRect(0, FLOOR, W, H - FLOOR);
+      const st = { head: [210, 110], mouth: 0, fire: 0, sleep: s.beat === 0 && s.phase === 'lead' };
+      if (s.beat === 0 && s.phase !== 'lead') { st.head = [196, 132]; st.mouth = 1; st.fire = s.phase === 'act' ? 1 : s.phase === 'death' ? 1 : s.pt * 0.9; st.fireLen = 110; st.fireDrop = 44; }
+      if (s.beat === 1) { st.head = [196, 130]; st.mouth = s.phase === 'cue' ? 0.4 : 1; st.fire = s.phase === 'death' ? 1 : 0; st.fireLen = 150; st.fireDrop = 50; }
+      if (s.beat === 2) { st.head = s.phase === 'cue' ? [lerp(200, 180, s.pt), lerp(120, 150, s.pt)] : [178, 158]; st.mouth = 0.5; }
+      if (s.beat === 3) { st.head = [lerp(190, 180, s.phase === 'cue' ? s.pt : 1), 150]; st.mouth = 0.8; st.flashNeck = s.phase === 'cue' && s.flash; st.fire = s.phase === 'death' ? 1 : 0; st.fireLen = 60; st.fireDrop = 30; st.dying = s.phase === 'act' ? s.pt : 0; }
+      if (s.after) { st.head = [180, 160]; st.dying = 1; st.mouth = 0.2; }
+      // claw swipe in beat 2
+      if (s.beat === 2 && s.phase !== 'lead') {
+        const sw = s.phase === 'cue' ? s.pt : s.phase === 'act' ? 1 + s.pt : 1.2;
+        c.strokeStyle = '#2a6a3a'; c.lineWidth = 10; c.lineCap = 'round'; c.beginPath(); c.moveTo(226, 150);
+        const cx = lerp(210, 110, clamp01(sw - 0.6)), cy = 168;
+        c.lineTo(cx, cy); c.stroke(); c.fillStyle = '#eee'; for (let k = 0; k < 3; k++) { c.beginPath(); c.moveTo(cx - 4, cy - 4 + k * 4); c.lineTo(cx - 12, cy - 6 + k * 5); c.lineTo(cx - 4, cy + k * 4); c.fill(); }
+      }
+      dragon(c, s, st);
+    },
+  });
+
+  const DEATH_TEXT = { fall: 'DOWN YOU GO', crush: 'SQUASHED', burn: 'TOASTED', skeleton: 'PICKED CLEAN' };
+
+  // ---------- game state ----------
+  let G, A;
+  function roomOrder() {
+    const mid = [1, 2, 3, 4, 5, 6];
+    for (let i = mid.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [mid[i], mid[j]] = [mid[j], mid[i]]; }
+    return [0, ...mid, 7];
+  }
+  function room() { return ROOMS[G.order[G.ri]]; }
+  function windowLen() { return Math.max(0.55, 1.25 - G.loop * 0.2 - G.ri * 0.02); }
+  function enterRoom() {
+    const r = room();
+    G.beat = 0; G.phase = 'enter'; G.pt = 0; G.ph = 0;
+    G.kx = r.start[0]; G.ky = r.start[1]; G.face = r.face || 1; G.pose = 'stand';
+    G.mirror = G.loop % 2 === 1;
+    AU.music(r.music);
+  }
+  function beginBeat() {
+    G.phase = 'lead'; G.ph = 0; G.from = [G.kx, G.ky];
+  }
+  function cueWanted() {
+    const c = room().beats[G.beat].cue;
+    if (!G.mirror) return c;
+    return c === 'left' ? 'right' : c === 'right' ? 'left' : c;
+  }
+  function beatAt(b) {
+    if (typeof b.at === 'string') { const i = +b.at.slice(4); const [x, y] = ropeEnd(i, G.t); return [x, y + 42 * KS]; }
+    return b.at;
+  }
+
+  A = Arcade.start({
+    id: 'knight', title: "KNIGHT'S GAUNTLET", subtitle: "A TRIBUTE TO DRAGON'S LAIR (1983)", color: '#ffd21e',
+    width: W, height: H, bg: '#000',
+    help: ['WATCH FOR WHAT FLASHES', 'ARROWS MOVE THAT WAY', 'SPACE SWINGS THE SWORD', 'ONE WRONG MOVE AND YOU DIE', 'SAVE THE PRINCESS'],
+    keys: { fire: ['Space', 'KeyZ', 'KeyJ', 'KeyX'] },
+    touch: { dpad: '4', buttons: [{ act: 'fire', label: 'SWORD' }] },
+    init() { G = { t: 0, order: [7], ri: 0, loop: 0, lives: 5 }; enterRoom(); G.phase = 'demo'; },
+    attract(a, dt) { G.t += dt; },
+    drawAttract(a) {
+      const c = a.ctx; const s = { beat: 0, phase: 'lead', pt: 0, t: G.t, flash: false, kx: 0 };
+      ROOMS[7].draw(c, s);
+      knight(c, 90, FLOOR, 'idle', 1, { t: G.t });
+    },
+    newGame(a) {
+      G = { t: 0, order: roomOrder(), ri: 0, loop: 0, lives: 5, moves: 0 };
+      enterRoom();
+    },
+    update(a, dt) {
+      G.t += dt; G.ph += dt;
+      const r = room();
+      const b = r.beats[G.beat];
+      if (G.phase === 'enter') { if (G.ph > 1.6) beginBeat(); return; }
+      if (G.phase === 'lead') {
+        const to = beatAt(b);
+        G.pt = clamp01(G.ph / b.lead);
+        G.kx = lerp(G.from[0], to[0], easeIO(G.pt)); G.ky = lerp(G.from[1], to[1], easeIO(G.pt));
+        G.pose = Math.abs(to[0] - G.from[0]) > 4 ? 'run' : 'idle';
+        if (to[0] !== G.from[0]) G.face = to[0] > G.from[0] ? 1 : -1;
+        if (G.ph >= b.lead) { G.phase = 'cue'; G.ph = 0; G.win = windowLen(); AU.play('cue', { v: 0.18 }); if (r.final && G.beat === 0) AU.play('roar', { v: 0.7 }); }
+        return;
+      }
+      if (G.phase === 'cue') {
+        G.pt = clamp01(G.ph / G.win);
+        if (typeof b.at === 'string') { const p = beatAt(b); G.kx = p[0]; G.ky = p[1]; G.pose = 'hang'; } else G.pose = 'idle';
+        const want = cueWanted();
+        const got = ['up', 'down', 'left', 'right', 'fire'].find(k => a.pressed(k));
+        if (got) {
+          const name = got === 'fire' ? 'sword' : got;
+          if (name === want) {
+            G.phase = 'act'; G.ph = 0; G.from = [G.kx, G.ky];
+            const pts = [251, 379, 495, 915][Math.floor(Math.random() * 4)];
+            a.addScore(pts); G.moves++;
+            G.popup = { t: 0.8, text: String(pts) };
+            if (b.act === 'swing' || b.act === 'slay') AU.play(Math.random() < 0.5 ? 'sword' : 'sword2', { v: 0.8 });
+            else AU.play('whoosh', { v: 0.35, rate: 1.4 });
+            if (b.act === 'jump' || b.act === 'rope') AU.play('jump', { v: 0.5 });
+            if (b.act === 'slay') { AU.play('roar', { v: 0.9, rate: 0.7 }); }
+          } else die(a, b);
+          return;
+        }
+        if (G.ph >= G.win) die(a, b);
+        return;
+      }
+      if (G.phase === 'act') {
+        const dur = { swing: 0.5, slay: 1.4, duck: 0.6, hop: 0.45, dash: 0.7, jump: 0.8, rope: 0.7, hide: 0.9 }[b.act] || 0.6;
+        G.pt = clamp01(G.ph / dur);
+        let to = b.to;
+        if (b.act === 'rope') { const [x, y] = ropeEnd(b.rope, G.t); to = [x, y + 42 * KS]; }
+        if (to) {
+          G.kx = lerp(G.from[0], to[0], G.pt); G.ky = lerp(G.from[1], to[1], G.pt);
+          if (b.act === 'jump' || b.act === 'rope' || b.act === 'hop') G.ky -= Math.sin(G.pt * Math.PI) * (b.act === 'hop' ? 14 : 34);
+          if (to[0] !== G.from[0]) G.face = to[0] > G.from[0] ? 1 : -1;
+        }
+        G.pose = { swing: G.pt < 0.3 ? 'windup' : 'swing', slay: G.pt < 0.35 ? 'windup' : 'swing', duck: 'duck', hop: 'jump', dash: 'run', jump: 'jump', rope: G.pt < 0.8 ? 'jump' : 'hang', hide: 'hide' }[b.act];
+        if (b.act === 'slay' && G.pt > 0.35 && !G.slayHit) { G.slayHit = true; AU.play('hit', { v: 0.9 }); }
+        if (G.ph >= dur) {
+          G.slayHit = false;
+          G.beat++;
+          if (G.beat >= r.beats.length) { G.phase = 'clear'; G.ph = 0; a.addScore(1939); AU.play('fanfare', { v: 0.9 }); if (r.final) { AU.stopMusic(1); } }
+          else beginBeat();
+        }
+        return;
+      }
+      if (G.phase === 'death') {
+        if (G.ph > 2.8) {
+          G.lives--;
+          if (G.lives <= 0) { a.gameOver(); return; }
+          enterRoom();
+        }
+        return;
+      }
+      if (G.phase === 'clear') {
+        const hold = r.final ? 5 : 1.6;
+        if (r.final) { G.kx = lerp(G.kx, 76, dt * 1.5); G.pose = G.ph < 3 ? 'run' : 'stand'; G.face = -1; }
+        if (G.ph > hold) {
+          G.ri++;
+          if (G.ri >= G.order.length) { G.ri = 0; G.loop++; G.order = roomOrder(); G.lives = Math.min(9, G.lives + 1); }
+          enterRoom();
+        }
+      }
+    },
+    draw(a) {
+      const c = a.ctx, r = room();
+      const b = r.beats[Math.min(G.beat, r.beats.length - 1)];
+      const flash = G.phase === 'cue' && Math.floor(G.ph * 8) % 2 === 0;
+      c.save();
+      if (G.mirror) { c.translate(W, 0); c.scale(-1, 1); }
+      const s = { beat: G.phase === 'clear' ? r.beats.length : Math.min(G.beat, r.beats.length - 1), phase: G.phase === 'enter' ? 'lead' : G.phase, pt: G.phase === 'death' ? clamp01(G.ph / 1.2) : G.pt || 0, t: G.t, flash, kx: G.kx, beat_obst: b.obst, freed: r.final && G.phase === 'clear' ? clamp01(G.ph / 2) : 0, after: r.final && G.phase === 'clear' };
+      if (G.phase === 'enter') { s.beat = 0; s.pt = 0; }
+      if (G.phase === 'clear' && !r.final) { s.beat = r.beats.length - 1; s.phase = 'act'; s.pt = 1; }
+      r.draw(c, s);
+      drawKnight(c, b, r);
+      c.restore();
+      // HUD
+      a.text(String(a.score).padStart(6, '0'), 6, 4, 8, '#ffd21e');
+      for (let k = 0; k < Math.min(8, G.lives - 1); k++) knight(c, W - 12 - k * 12, 20, 'stand', -1, { scale: 0.32, noSword: true, hud: true });
+      if (G.phase === 'enter') {
+        c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(0, 84, W, 44);
+        a.text(r.name, W / 2, 94, 10, '#ffd21e', 'center');
+        a.text(G.mirror ? 'MIRRORED' : 'ROOM ' + (G.ri + 1) + ' OF ' + G.order.length, W / 2, 112, 8, '#ccc', 'center');
+      }
+      if (G.phase === 'cue') {
+        // the move to make, shown as a flashing hint over the knight
+        const want = cueWanted();
+        if (flash) hint(c, want, G.mirror ? W - G.kx : G.kx, G.ky - 76);
+        const w = 60 * (1 - G.pt); c.fillStyle = G.pt > 0.7 ? '#f33' : '#ffd21e'; c.fillRect(W / 2 - w / 2, 18, w, 3);
+      }
+      if (G.popup && G.popup.t > 0) { G.popup.t -= 1 / 60; a.text(G.popup.text, W / 2, 28, 8, '#fff', 'center'); }
+      if (G.phase === 'death' && G.ph > 1.3) a.text(DEATH_TEXT[b.death] || 'DEAD', W / 2, 60, 10, '#f33', 'center');
+      if (G.phase === 'clear') {
+        if (r.final) { a.text('THE PRINCESS IS SAVED!', W / 2, 40, 8, '#ff5cb8', 'center'); if (G.ph > 2) a.text('ON TO THE NEXT QUEST', W / 2, 56, 8, '#ffd21e', 'center'); }
+        else a.text('ROOM CLEARED', W / 2, 50, 10, '#7cf', 'center');
+      }
+    },
+  });
+
+  function die(a, b) {
+    G.phase = 'death'; G.ph = 0; G.deathType = b.death; G.deathX = G.kx; G.deathY = G.ky;
+    AU.play('scream', { v: 0.7 });
+    if (b.death === 'burn') AU.play('fire', { v: 0.7 });
+    if (b.death === 'crush') AU.play('crash', { v: 0.7 });
+    if (b.death === 'fall') AU.play('fall', { v: 0.7 });
+    if (b.death === 'skeleton') AU.play('hit', { v: 0.8 });
+  }
+
+  function hint(c, want, x, y) {
+    c.save(); c.translate(x, y);
+    c.fillStyle = '#ffd21e'; c.strokeStyle = '#000'; c.lineWidth = 2;
+    c.beginPath();
+    if (want === 'sword') { c.arc(0, 0, 9, 0, 7); c.fill(); c.stroke(); c.fillStyle = '#000'; c.fillRect(-1, -6, 2, 10); c.fillRect(-4, 1, 8, 2); c.restore(); return; }
+    const rot = { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[want];
+    c.rotate(rot); c.moveTo(0, -10); c.lineTo(9, 2); c.lineTo(4, 2); c.lineTo(4, 9); c.lineTo(-4, 9); c.lineTo(-4, 2); c.lineTo(-9, 2); c.closePath(); c.fill(); c.stroke();
+    c.restore();
+  }
+
+  function drawKnight(c, b, r) {
+    const o = { t: G.t, magic: (r.final && (G.beat > 1 || G.phase === 'clear')) };
+    if (G.phase === 'death') {
+      const p = G.ph, x = G.deathX, y = G.deathY;
+      if (G.deathType === 'skeleton') {
+        if (p < 1.2) knight(c, x, y, 'fall', G.face, Object.assign(o, { skel: Math.floor(p * 14) % 2 === 0 }));
+        else { const k = clamp01((p - 1.2) * 2); knight(c, x, y, 'fall', G.face, Object.assign(o, { skel: true, squash: 1 - k * 0.8 })); }
+      } else if (G.deathType === 'fall') {
+        const k = clamp01(p / 1.4);
+        if (k < 1) knight(c, x, y + k * k * 120, 'fall', G.face, Object.assign(o, { scale: 1 - k * 0.5 }));
+      } else if (G.deathType === 'burn') {
+        if (p < 1) knight(c, x, y, 'fall', G.face, Object.assign(o, { tint: Math.floor(p * 16) % 2 ? '#ff4a1a' : '#1a1010' }));
+        else {
+          const k = clamp01((p - 1) * 1.5);
+          knight(c, x, y, 'fall', G.face, Object.assign(o, { tint: '#1a1010', squash: 1 - k * 0.85, noSword: true }));
+          c.fillStyle = 'rgba(120,120,120,.5)'; for (let i = 0; i < 5; i++) { c.beginPath(); c.arc(x + Math.sin(p * 3 + i) * 6, y - 10 - (p - 1) * 30 - i * 8, 4 + i, 0, 7); c.fill(); }
+        }
+      } else {
+        const k = clamp01(p * 3);
+        knight(c, x, y, 'stand', G.face, Object.assign(o, { squash: 1 - k * 0.85 }));
+      }
+      return;
+    }
+    if (G.phase === 'clear' && !r.final) return knight(c, G.kx, G.ky, 'stand', G.face, o);
+    if (r.raft && G.phase !== 'act') { G.ky = 176; }
+    const scale = b.act === 'hide' && G.phase === 'act' ? 1 - G.pt * 0.25 : 1;
+    if (r.name === 'THE ROLLING STONE' && G.beat >= 2 && G.phase === 'clear') return;
+    knight(c, G.kx, G.ky, G.pose, G.face, Object.assign(o, { scale }));
+  }
+
+  window.__g = () => G;
+  window.__want = () => (G.phase === 'cue' ? cueWanted() : null);
+  window.__enter = i => { G.order = [i]; G.ri = 0; enterRoom(); };
+})();
+</script>
+</body>
+</html>

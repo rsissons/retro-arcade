@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sunset Cruiser</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+<style>
+  .arc-btns { gap: 10px; }
+  .arc-btns .arc-round { width: 64px; height: 64px; }
+  .arc-pad-lr { width: 150px; }
+  .arc-pad-lr .arc-d-left, .arc-pad-lr .arc-d-right { width: 68px; }
+</style>
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script src="../../shared/road3d.js"></script>
+<script src="../../shared/roadart.js"></script>
+<script>
+(function () {
+  const W = 320, H = 224;
+  const P = Road3D.paint;
+  const { rng, hexMix, PROP, CHEV, GATES, gates, bgFor } = RoadArt;
+  const AU = Arcade.Audio;
+  AU.load({
+    'radio-synthwave': '../../assets/audio/radio-synthwave.m4a',
+    'radio-bassline': '../../assets/audio/radio-bassline.m4a',
+    'radio-chiprun': '../../assets/audio/radio-chiprun.m4a',
+    'race-goal': '../../assets/audio/race-goal.m4a',
+    engine: '../../assets/sfx/engine.wav', skid: '../../assets/sfx/skid.wav', crash: '../../assets/sfx/crash.wav',
+    bump: '../../assets/sfx/bump.wav', fanfare: '../../assets/sfx/fanfare.wav', select: '../../assets/sfx/select.wav',
+    move: '../../assets/sfx/move.wav',
+  });
+  const STATIONS = [
+    { id: 'radio-synthwave', name: 'SYNTH WAVE', freq: '88.5' },
+    { id: 'radio-bassline', name: 'BASSLINE FM', freq: '101.3' },
+    { id: 'radio-chiprun', name: 'CHIP RUN', freq: '104.2' },
+  ];
+
+  // ---------- sprites (drawn in code, low-res so they scale up blocky) ----------
+  function carRear(body, dark, lean) {
+    return P(72, 38, (c) => {
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(4, 33, 64, 5);
+      c.fillStyle = '#111'; c.fillRect(5, 24, 12, 13); c.fillRect(55, 24, 12, 13);
+      c.fillStyle = '#333'; c.fillRect(7, 26, 8, 9); c.fillRect(57, 26, 8, 9);
+      // cabin: windscreen frame and the two people
+      const o = lean;
+      c.fillStyle = '#9fd8ff'; c.fillRect(16 + o, 4, 40, 8);
+      c.fillStyle = '#222'; c.fillRect(15 + o, 3, 42, 2);
+      c.fillStyle = '#3a2412'; c.beginPath(); c.arc(26 + o, 11, 5, 0, 7); c.fill();
+      c.fillStyle = '#ffd35a'; c.beginPath(); c.arc(45 + o, 11, 5.5, 0, 7); c.fill(); c.fillRect(40 + o, 11, 11, 6);
+      // body
+      c.fillStyle = body; c.beginPath();
+      c.moveTo(6, 16); c.lineTo(14 + o / 2, 13); c.lineTo(58 + o / 2, 13); c.lineTo(66, 16); c.lineTo(68, 30); c.lineTo(4, 30); c.closePath(); c.fill();
+      c.fillStyle = dark; c.fillRect(4, 26, 64, 4);
+      c.fillStyle = '#111'; c.fillRect(12, 18, 48, 6);
+      c.fillStyle = '#ff3b1f'; c.fillRect(8, 18, 12, 4); c.fillRect(52, 18, 12, 4);
+      c.fillStyle = '#ffb000'; c.fillRect(8, 22, 12, 1); c.fillRect(52, 22, 12, 1);
+      c.fillStyle = '#ccc'; c.fillRect(30, 25, 12, 3);
+      c.fillStyle = 'rgba(255,255,255,.35)'; c.fillRect(10, 14, 52, 1);
+    });
+  }
+  const PLAYER = [carRear('#e8141c', '#8a0a10', -3), carRear('#e8141c', '#8a0a10', 0), carRear('#e8141c', '#8a0a10', 3)];
+
+  function trafficCar(kind, col) {
+    const dark = hexMix(col, '#000000', 0.45);
+    if (kind === 'truck') return P(48, 50, c => {
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(2, 46, 44, 4);
+      c.fillStyle = '#111'; c.fillRect(3, 38, 9, 11); c.fillRect(36, 38, 9, 11);
+      c.fillStyle = col; c.fillRect(2, 2, 44, 38); c.fillStyle = dark; c.fillRect(2, 2, 44, 3); c.fillRect(23, 5, 2, 33);
+      c.fillStyle = '#ddd'; c.fillRect(20, 18, 2, 6); c.fillRect(26, 18, 2, 6);
+      c.fillStyle = '#222'; c.fillRect(2, 40, 44, 4); c.fillStyle = '#f22'; c.fillRect(3, 40, 5, 3); c.fillRect(40, 40, 5, 3);
+    });
+    if (kind === 'bug') return P(38, 28, c => {
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(3, 25, 32, 3);
+      c.fillStyle = '#111'; c.fillRect(4, 18, 7, 9); c.fillRect(27, 18, 7, 9);
+      c.fillStyle = col; c.beginPath(); c.ellipse(19, 16, 17, 14, 0, Math.PI, 0); c.fill(); c.fillRect(2, 15, 34, 7);
+      c.fillStyle = '#23384a'; c.beginPath(); c.ellipse(19, 9, 9, 5, 0, Math.PI, 0); c.fill();
+      c.fillStyle = dark; c.fillRect(2, 20, 34, 3); c.fillStyle = '#f33'; c.fillRect(4, 14, 5, 5); c.fillRect(29, 14, 5, 5);
+      c.fillStyle = '#bbb'; c.fillRect(6, 23, 26, 2);
+    });
+    if (kind === 'van') return P(46, 36, c => {
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(2, 32, 42, 4);
+      c.fillStyle = '#111'; c.fillRect(4, 26, 8, 10); c.fillRect(34, 26, 8, 10);
+      c.fillStyle = col; c.fillRect(2, 2, 42, 28); c.fillStyle = '#2a4050'; c.fillRect(6, 5, 15, 9); c.fillRect(25, 5, 15, 9);
+      c.fillStyle = dark; c.fillRect(2, 26, 42, 4); c.fillRect(22, 4, 2, 22);
+      c.fillStyle = '#f33'; c.fillRect(3, 18, 4, 6); c.fillRect(39, 18, 4, 6);
+    });
+    return P(46, 24, c => {  // coupe
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(2, 21, 42, 3);
+      c.fillStyle = '#111'; c.fillRect(4, 15, 8, 9); c.fillRect(34, 15, 8, 9);
+      c.fillStyle = col; c.beginPath(); c.moveTo(10, 8); c.lineTo(14, 2); c.lineTo(32, 2); c.lineTo(36, 8); c.lineTo(44, 10); c.lineTo(44, 19); c.lineTo(2, 19); c.lineTo(2, 10); c.closePath(); c.fill();
+      c.fillStyle = '#1e2d3a'; c.fillRect(15, 4, 16, 5);
+      c.fillStyle = dark; c.fillRect(2, 16, 42, 3); c.fillStyle = '#f33'; c.fillRect(4, 11, 8, 3); c.fillRect(34, 11, 8, 3);
+    });
+  }
+  const TRAFFIC = [];
+  for (const [k, ww] of [['coupe', 0.24], ['bug', 0.2], ['van', 0.25], ['truck', 0.28]])
+    for (const col of ['#f5f5f5', '#2f6fe0', '#f2c21b', '#1ea34a', '#8a3fd1', '#e86d1a'])
+      TRAFFIC.push({ img: trafficCar(k, col), ww, hit: ww * 0.8 });
+
+  // ---------- themes: 5 rows, row r has r+1 stages; left is easier ----------
+  const T = (name, o) => Object.assign({ name, lane: '#ffffff', rumble: ['#ffffff', '#d8201c'], road: ['#6b6b6b', '#646464'] }, o);
+  const THEMES = [
+    [T('PALM COAST', { sky: ['#2f7fe8', '#a8dcff'], sun: '#fff6c0', far: 'sea', farCol: '#2a86d8', nearCol: '#e8d7a0', grass: ['#e8d9a8', '#dccb96'], fog: '#bfe3ff', props: { palm: 6, bush: 1, billboard: 1 }, curvy: 0.4, hilly: 0.3, traffic: 10 })],
+    [T('RED CANYON', { sky: ['#3d8ee8', '#ffd9a0'], sun: '#fff0b0', far: 'mesa', farCol: '#b4532a', nearCol: '#d48a4a', grass: ['#d9a26a', '#cc955e'], fog: '#f2d2a8', props: { rock: 4, cactus: 3, redrock: 2 }, curvy: 0.5, hilly: 0.5, traffic: 10 }),
+     T('HARBOR CITY', { sky: ['#ff8a3d', '#ffd08a'], sun: '#fff1b5', far: 'city', farCol: '#7d5a8c', nearCol: '#8c7078', grass: ['#8a8f96', '#80858c'], fog: '#ffc89a', props: { building: 3, tower: 2, lamp: 4, billboard: 1 }, curvy: 0.6, hilly: 0.3, traffic: 16 })],
+    [T('WINDMILL FIELDS', { sky: ['#4a9cf0', '#d8f0ff'], sun: '#ffffff', far: 'hills', farCol: '#5e9c4c', nearCol: '#7fbf55', grass: ['#79c050', '#6db347'], fog: '#cfeaff', props: { windmill: 3, flowers: 5, bush: 2 }, curvy: 0.5, hilly: 0.6, traffic: 12 }),
+     T('OLD RUINS', { sky: ['#3e7fd8', '#f0e6c8'], sun: '#fffbe0', far: 'mesa', farCol: '#a89878', nearCol: '#c9b68e', grass: ['#c4b58a', '#b8a97e'], fog: '#efe4c6', props: { column: 5, rock: 2, bush: 1 }, curvy: 0.6, hilly: 0.5, traffic: 14 }),
+     T('PINE PASS', { sky: ['#5b8fd0', '#e6f0fa'], sun: null, far: 'peaks', farCol: '#8a9ab8', nearCol: '#3d6b4a', grass: ['#3f8a4a', '#377d42'], fog: '#dce8f4', props: { pine: 6, rock: 1 }, curvy: 0.8, hilly: 0.8, traffic: 12 })],
+    [T('SUNSET SHORE', { sky: ['#6a2c8c', '#ff9a4a'], sun: '#ffd35a', far: 'sea', farCol: '#b0508a', nearCol: '#e0a070', grass: ['#e0b884', '#d4ab78'], fog: '#ff9e6a', props: { palm: 6, billboard: 1 }, curvy: 0.5, hilly: 0.4, traffic: 12 }),
+     T('DUST HIGHWAY', { sky: ['#6aa6e8', '#fff0c8'], sun: '#ffffff', far: 'dunes', farCol: '#d8b070', nearCol: '#e8c888', grass: ['#e6c586', '#dab97a'], fog: '#f6e2b8', props: { cactus: 5, rock: 2, billboard: 1 }, curvy: 0.6, hilly: 0.7, traffic: 16 }),
+     T('DEEP FOREST', { sky: ['#3c6e9a', '#b8d8c8'], sun: null, far: 'peaks', farCol: '#3a5a5a', nearCol: '#244a30', grass: ['#2c6a36', '#265e30'], fog: '#9cc0b0', props: { pine: 7, bush: 2 }, curvy: 0.9, hilly: 0.8, traffic: 14 }),
+     T('NEON NIGHT', { sky: ['#07051a', '#3a1a5a'], sun: null, far: 'city', farCol: '#1a1440', nearCol: '#2a1f4a', grass: ['#1d1a2e', '#191627'], fog: '#2a1f4a', road: ['#3a3a48', '#34343f'], lane: '#ff5cf0', rumble: ['#ff5cf0', '#23d8ff'], props: { nightbldg: 4, neonlamp: 5 }, curvy: 0.8, hilly: 0.4, traffic: 18 })],
+    [T('LAKESIDE', { sky: ['#3f8fe8', '#d8f0ff'], sun: '#ffffff', far: 'peaks', farCol: '#7c9cc8', nearCol: '#5aa05a', grass: ['#6cb85a', '#62ab52'], fog: '#cfe6ff', props: { pine: 3, flowers: 3, bush: 2 }, curvy: 0.6, hilly: 0.5, traffic: 12 }),
+     T('RED ROCK', { sky: ['#2f6fd0', '#ffc27a'], sun: '#fff0b0', far: 'mesa', farCol: '#9c3a1c', nearCol: '#c0602e', grass: ['#c8783e', '#bc6e36'], fog: '#f0b07a', props: { redrock: 3, cactus: 3, rock: 2 }, curvy: 0.8, hilly: 0.8, traffic: 14 }),
+     T('ALPINE PEAK', { sky: ['#2a5ea8', '#e8f2ff'], sun: '#ffffff', far: 'peaks', farCol: '#c8d4ec', nearCol: '#e8eef8', grass: ['#eef2fa', '#e2e8f4'], fog: '#e8f0ff', rumble: ['#ffffff', '#1f5fd8'], props: { snowpine: 6, rock: 1 }, curvy: 0.9, hilly: 1, traffic: 14 }),
+     T('VOLCANO RIM', { sky: ['#2a0a0a', '#c8401a'], sun: '#ff9a3a', far: 'peaks', farCol: '#4a1a10', nearCol: '#2a1410', grass: ['#3a2418', '#33201a'], fog: '#8a2a14', road: ['#4a4040', '#443a3a'], rumble: ['#ffb000', '#2a2a2a'], props: { rock: 5, redrock: 2 }, curvy: 1, hilly: 0.9, traffic: 14 }),
+     T('MIDNIGHT BAY', { sky: ['#020412', '#1a2a5a'], sun: '#f4f4ff', far: 'city', farCol: '#101a3a', nearCol: '#0e1630', grass: ['#141c30', '#10182a'], fog: '#1a2448', road: ['#383c4a', '#323644'], lane: '#ffe070', props: { nightbldg: 3, lamp: 5 }, curvy: 1, hilly: 0.6, traffic: 20 })],
+  ];
+  const TIME_BONUS = [0, 52, 50, 48, 46];
+  function blendTheme(a, b, t) {
+    const o = Object.assign({}, b);
+    for (const k of ['lane', 'fog']) o[k] = hexMix(a[k], b[k], t);
+    for (const k of ['grass', 'road', 'rumble']) o[k] = [hexMix(a[k][0], b[k][0], t), hexMix(a[k][1], b[k][1], t)];
+    return o;
+  }
+
+  // ---------- road ----------
+  const road = Road3D.create({ width: W, height: H, lanes: 3, drawDist: 240, fogDensity: 3 });
+  const MAX = road.segLen * 60;           // top speed, world units per second (about 293 km/h)
+  const LOW_MAX = MAX * 0.66;
+  const KMH = 293 / MAX;
+  let G, A;
+
+  function genStage(row, col, prevTheme) {
+    const th = THEMES[row][col];
+    const R = rng(row * 131 + col * 17 + 5);
+    const start = road.segs.length;
+    const blendN = prevTheme ? 60 : 0;
+    const steps = [];
+    for (let k = 1; k <= 6; k++) steps.push(blendTheme(prevTheme || th, th, k / 6));
+    const themeAt = n => (n - start < blendN ? steps[Math.min(5, Math.floor((n - start) / blendN * 6))] : th);
+    const add = (e, h, l, curve, hill) => {
+      const s0 = road.segs.length;
+      road.addRoad(e, h, l, curve, hill, th);
+      for (let n = s0; n < road.segs.length; n++) road.segs[n].theme = themeAt(n);
+      return s0;
+    };
+    add(10, 40, 10, 0, 0);
+    const gateSeg = start + 6;
+    road.addSprite(gateSeg, { img: row === 0 ? GATES.start : GATES.check, ww: 2.7, x: road.lastCx(), gate: row === 0 ? 'start' : 'check' });
+    const target = start + 1700 + row * 60;
+    let lastHill = 0;
+    while (road.segs.length < target) {
+      const curve = (R() < 0.25 ? 0 : (R() < 0.5 ? -1 : 1) * (1 + R() * 5) * th.curvy);
+      let hill = (R() < 0.5 ? 0 : (R() * 2 - 1) * 60 * th.hilly);
+      if (lastHill + hill > 120) hill = -Math.abs(hill); if (lastHill + hill < -120) hill = Math.abs(hill);
+      lastHill += hill;
+      const e = 20 + Math.floor(R() * 30), h = 30 + Math.floor(R() * 80), l = 20 + Math.floor(R() * 30);
+      const s0 = add(e, h, l, curve, hill);
+      if (Math.abs(curve) > 2.2) for (let k = 0; k < 4; k++) {
+        const sx = road.lastCx() + (curve > 0 ? -1.5 : 1.5);
+        road.addSprite(s0 - 30 + k * 8, { img: CHEV, ww: 0.32, x: sx, hit: 0.28, flip: curve > 0 });
+      }
+    }
+    add(20, 60, 20, 0, -lastHill / 2);
+    // scenery along the stage
+    const bag = []; for (const k in th.props) for (let i = 0; i < th.props[k]; i++) bag.push(k);
+    for (let n = start + 12; n < road.segs.length; n += 3 + Math.floor(R() * 5)) {
+      if (road.segs[n].sprites.length) continue;
+      for (const side of [-1, 1]) {
+        if (R() < 0.35) continue;
+        const name = bag[Math.floor(R() * bag.length)], pr = PROP[name];
+        if (name === 'sea') continue;
+        const cx = road.segs[n].p1.cx;
+        const off = 1.25 + pr.ww / 2 + (name === 'building' || name === 'tower' || name === 'nightbldg' ? 0.4 + R() * 1.5 : R() * 1.4);
+        road.addSprite(n, { img: pr.img, ww: pr.ww, x: cx + side * off, hit: pr.hit, flip: side > 0 && R() < 0.5 });
+      }
+    }
+    return { row, col, theme: th, start, gateSeg, end: road.segs.length };
+  }
+
+  function genFork(stage) {
+    const th = stage.theme;
+    const f = road.addFork(240, 2.3, th);
+    road.addSprite(f.start - 40, { img: GATES.fork, ww: 0.6, x: f.base - 1.6, hit: 0.2 });
+    road.addSprite(f.start - 40, { img: GATES.fork, ww: 0.6, x: f.base + 1.6, hit: 0.2 });
+    const pr = PROP[Object.keys(th.props)[0]];
+    for (let n = f.start; n < f.end; n += 6) {
+      const s = road.segs[n];
+      if (s.p1.bx - s.p1.cx > 2.9) road.addSprite(n, { img: PROP.bush.img, ww: 0.3, x: f.base, hit: 0.2 });
+      if (n % 12) continue;
+      road.addSprite(n, { img: pr.img, ww: pr.ww, x: s.p1.cx - 1.8, hit: pr.hit });
+      road.addSprite(n, { img: pr.img, ww: pr.ww, x: s.p1.bx + 1.8, hit: pr.hit, flip: true });
+    }
+    return f;
+  }
+
+  function goalRun(stage) {
+    const th = stage.theme;
+    const s0 = road.segs.length;
+    road.addRoad(10, 400, 10, 0, 0, th);
+    road.addSprite(s0 + 4, { img: GATES.goal, ww: 2.7, x: road.lastCx(), gate: 'goal' });
+    return s0 + 4;
+  }
+
+  function buildStart() {
+    road.reset();
+    G.stage = genStage(0, 0, null);
+    G.fork = genFork(G.stage);
+  }
+
+  // ---------- traffic ----------
+  function spawnCar(z) {
+    const seg = road.findSeg(z);
+    if (seg.p1.bx != null || !seg.theme) return;
+    const t = TRAFFIC[Math.floor(Math.random() * TRAFFIC.length)];
+    const lane = [-0.66, 0, 0.66][Math.floor(Math.random() * 3)];
+    road.cars.push({ z, x: seg.p1.cx + lane, lane, img: t.img, ww: t.ww, hit: t.hit, speed: MAX * (0.25 + Math.random() * 0.3) });
+  }
+
+  // ---------- game ----------
+  const tilt = { on: false, value: 0 };
+  let tiltRef = tilt;
+  function startRace() {
+    G.phase = 'race';
+    AU.music(STATIONS[G.station].id);
+    G.engine = AU.loop('engine', { v: 0.22, rate: 0.6 });
+  }
+
+  A = Arcade.start({
+    id: 'cruiser', title: 'SUNSET CRUISER', subtitle: 'A TRIBUTE TO OUT RUN (1986)', color: '#ff7a3d',
+    width: W, height: H, bg: '#000',
+    help: ['LEFT/RIGHT STEER', 'UP OR X GAS  DOWN OR Z BRAKE', 'SPACE SHIFT LOW/HIGH', 'PICK A ROAD AT EVERY FORK', 'BEAT THE CLOCK TO THE GOAL'],
+    keys: { fire: ['ArrowUp', 'KeyX', 'KeyW'], down: ['ArrowDown', 'KeyZ', 'KeyS'], b: ['Space', 'KeyC', 'ShiftLeft', 'ShiftRight'], up: [] },
+    touch: { dpad: 'lr', buttons: [{ act: 'b', label: 'GEAR' }, { act: 'down', label: 'BRAKE' }, { act: 'fire', label: 'GAS' }] },
+    init() { gates(); tiltRef = Road3D.tilt(); G = { demo: true, z: 0, x: 0, speed: MAX * 0.5, bgX: 0 }; buildStart(); },
+    attract(a, dt) {
+      G.z += G.speed * dt;
+      const seg = road.findSeg(G.z + road.playerZ);
+      G.x += (seg.p1.cx - G.x) * dt * 2;
+      G.bgX += seg.curve * dt * 0.02;
+      if (G.z > road.length() - 300 * road.segLen) G.z = 0;
+    },
+    drawAttract(a) { drawWorld(a); },
+    newGame(a) {
+      if (G && G.engine) G.engine.stop();
+      G = { z: 0, x: 0, speed: 0, gear: 0, time: 70, bgX: 0, phase: 'radio', station: 0, radioT: 10, t: 0,
+        crash: 0, spin: 0, bounce: 0, stageNo: 1, scoreAcc: 0, banner: 0, bannerText: '', steer: 0, skidT: 0, goalT: 0, route: [] };
+      buildStart();
+      AU.music(STATIONS[0].id);
+      a.sfx.init();
+    },
+    update(a, dt) {
+      G.t += dt;
+      if (G.phase === 'radio') {
+        G.radioT -= dt;
+        if (a.pressed('left') || a.pressed('right')) {
+          G.station = (G.station + (a.pressed('left') ? 2 : 1)) % 3;
+          AU.music(STATIONS[G.station].id, { fade: 0.2 });
+          AU.play('move', { v: 0.6 });
+        }
+        if (a.pressed('fire') || a.pressed('b') || G.radioT <= 0) { AU.play('select', { v: 0.7 }); startRace(); }
+        return;
+      }
+      const seg = road.findSeg(G.z + road.playerZ);
+      const pct = ((G.z + road.playerZ) % road.segLen) / road.segLen;
+      const onRoad = road.roadAt(seg, pct, G.x);
+      const sp = G.speed / MAX;
+
+      // clock
+      if (G.phase === 'race') {
+        G.time -= dt;
+        if (G.time <= 0) { G.time = 0; G.phase = 'timeup'; G.goalT = 0; AU.stopMusic(1.5); }
+      }
+
+      // driving
+      let gas = false, brake = false, steer = 0;
+      if (G.phase === 'race' && G.crash <= 0) {
+        gas = a.down('fire'); brake = a.down('down');
+        steer = (a.down('left') ? -1 : 0) + (a.down('right') ? 1 : 0);
+        if (tiltRef.on && !steer) steer = tiltRef.value;
+        if (a.pressed('b')) { G.gear ^= 1; AU.play('move', { v: 0.5, rate: G.gear ? 1.3 : 0.8 }); }
+      }
+      if (G.phase === 'goal') { steer = (onRoad.center - G.x) * 2; gas = false; }
+      G.steer += (steer - G.steer) * Math.min(1, dt * 10);
+      const top = G.gear ? MAX : LOW_MAX;
+      if (gas) {
+        let acc = G.gear ? (G.speed < MAX * 0.35 ? MAX * 0.07 : MAX * 0.26) : MAX * 0.42;
+        if (G.speed > top) G.speed -= MAX * 0.3 * dt; else G.speed = Math.min(top, G.speed + acc * dt);
+      } else if (brake) G.speed = Math.max(0, G.speed - MAX * 0.9 * dt);
+      else G.speed = Math.max(0, G.speed - MAX * (G.phase === 'race' ? 0.12 : 0.3) * dt);
+      if (!G.gear && G.speed > LOW_MAX) G.speed -= MAX * 0.25 * dt;
+
+      if (G.crash > 0) {
+        G.crash -= dt; G.speed = Math.max(0, G.speed - MAX * 1.2 * dt);
+        if (G.crash <= 0) { G.x = onRoad.center; G.speed = 0; }
+      } else {
+        const dx = dt * 2.2 * Math.min(1, sp * 1.4);
+        G.x += G.steer * dx;
+        G.x -= dx * sp * seg.curve * 0.33;          // bends push you outward
+        if (Math.abs(seg.curve) > 3 && sp > 0.7 && G.steer * seg.curve > 0.5) {
+          G.skidT -= dt; if (G.skidT <= 0) { AU.play('skid', { v: 0.35 }); G.skidT = 0.3; }
+        }
+      }
+      if (G.spin > 0) G.spin -= dt;
+
+      // off road
+      const off = onRoad.off;
+      if (off > 1.05) {
+        if (G.speed > MAX * 0.32) G.speed -= MAX * 0.9 * dt;
+        G.bounce = Math.random() * 3 * sp;
+      } else G.bounce = 0;
+      G.x = Math.max(onRoad.center - 3.2, Math.min(onRoad.center + 3.2, G.x));
+
+      // move
+      G.z += G.speed * dt;
+      G.bgX += seg.curve * sp * dt * 0.012;
+      const pz = G.z + road.playerZ;
+
+      // roadside crashes
+      const pw = 0.22;
+      if (G.crash <= 0) for (const s of [seg, road.segs[seg.i + 1]]) {
+        if (!s) continue;
+        for (const o of s.sprites) {
+          if (!o.hit || o.gone) continue;
+          if (Math.abs(G.x - o.x) < (pw + o.hit) / 2) {
+            if (G.speed > MAX * 0.3) {
+              G.crash = 2.2; G.spin = 0; AU.play('crash', { v: 0.8 }); a.sfx.noise({ d: 0.5, v: 0.2, f: 900, f2: 100 });
+            } else {
+              G.speed = Math.min(G.speed, MAX * 0.1); AU.play('bump', { v: 0.7 });
+              G.x += G.x > o.x ? 0.08 : -0.08;
+            }
+            break;
+          }
+        }
+      }
+
+      // traffic
+      for (const c of road.cars) {
+        const cs = road.findSeg(c.z);
+        c.z += c.speed * dt;
+        const ns = road.findSeg(c.z);
+        c.x = ns.p1.cx + c.lane;
+        if (G.crash > 0) continue;
+        const dz = c.z - pz;
+        if (dz > -40 && dz < 160 && Math.abs(G.x - c.x) < (pw + c.hit) / 2 && G.speed > c.speed) {
+          const diff = G.speed - c.speed;
+          if (diff > MAX * 0.3) { G.spin = 1.2; G.speed = c.speed * 0.4; AU.play('skid', { v: 0.6 }); AU.play('bump', { v: 0.8 }); }
+          else { G.speed = c.speed * 0.85; AU.play('bump', { v: 0.6 }); }
+          c.z = pz + 170;
+        }
+        void cs;
+      }
+      road.cars = road.cars.filter(c => c.z > G.z - 200 && c.z < road.length() - road.segLen * 4);
+      const want = G.phase === 'race' ? G.stage.theme.traffic : 0;
+      if (road.cars.length < want && Math.random() < dt * 3) spawnCar(G.z + road.segLen * (120 + Math.random() * 100));
+
+      // gates
+      for (const s of [seg, road.segs[seg.i - 1]]) {
+        if (!s) continue;
+        for (const o of s.sprites) {
+          if (!o.gate || o.passed) continue;
+          o.passed = true;
+          if (o.gate === 'check') {
+            G.time += TIME_BONUS[G.stage.row];
+            G.stageNo++;
+            G.banner = 3; G.bannerText = 'EXTENDED PLAY';
+            AU.play('fanfare', { v: 0.8 });
+          } else if (o.gate === 'goal') {
+            G.phase = 'goal'; G.goalT = 0; G.bonus = Math.floor(G.time) * 20000; G.bonusShown = 0;
+            AU.music('race-goal', { loop: false });
+            AU.play('fanfare', { v: 0.9 });
+          }
+        }
+      }
+
+      // forks: pick a road once they separate
+      if (G.fork && !G.fork.chosen && seg.i > G.fork.start && seg.p1.bx != null && seg.p1.bx - seg.p1.cx > 2.3) {
+        const right = Math.abs(G.x - seg.p1.bx) < Math.abs(G.x - seg.p1.cx);
+        G.fork.chosen = true;
+        road.chooseBranch(G.fork, seg.i + 1, right);
+        const row = G.stage.row + 1, col = G.stage.col + (right ? 1 : 0);
+        G.route.push(right ? 'R' : 'L');
+        G.stage = genStage(row, col, G.stage.theme);
+        if (row < 4) G.fork = genFork(G.stage); else { G.fork = null; goalRun(G.stage); }
+      }
+      if (G.stage && seg.i >= G.stage.start && G.stage.row > 0 && G.shownTheme !== G.stage.theme.name) {
+        G.shownTheme = G.stage.theme.name; G.banner = Math.max(G.banner, 3);
+      }
+      if (G.banner > 0) G.banner -= dt;
+
+      // score
+      if (G.phase === 'race' && G.crash <= 0) {
+        G.scoreAcc += G.speed * KMH * dt * 12;
+        if (G.scoreAcc >= 10) { const n = Math.floor(G.scoreAcc / 10) * 10; a.addScore(n); G.scoreAcc -= n; }
+      }
+
+      // engine note
+      if (G.engine) {
+        const rpm = G.speed / (G.gear ? MAX : LOW_MAX);
+        G.engine.rate(0.55 + rpm * 1.25 + (gas ? 0.08 : 0));
+        G.engine.vol(G.phase === 'race' || G.phase === 'goal' ? 0.2 : 0.08);
+      }
+
+      if (G.phase === 'timeup') { G.goalT += dt; if (G.goalT > 3.5 && G.speed < 50) end(a); }
+      if (G.phase === 'goal') {
+        G.goalT += dt;
+        if (G.goalT > 1.5 && G.bonusShown < G.bonus) {
+          const step = Math.min(G.bonus - G.bonusShown, Math.ceil(G.bonus * dt / 2.5 / 1000) * 1000);
+          G.bonusShown += step; a.addScore(step);
+          if (Math.floor(G.goalT * 12) % 2) a.sfx.tone({ f: 1400, d: 0.03, v: 0.04 });
+        }
+        if (G.goalT > 8) end(a);
+      }
+    },
+    draw(a) {
+      drawWorld(a);
+      if (G.phase === 'radio') return drawRadio(a);
+      drawHud(a);
+    },
+    onGameOver() { if (G.engine) { G.engine.stop(); G.engine = null; } },
+  });
+  function end(a) { if (G.engine) { G.engine.stop(); G.engine = null; } a.gameOver(); }
+
+  function drawWorld(a) {
+    const c = a.ctx;
+    const seg = road.findSeg(G.z + road.playerZ);
+    const th = seg.theme;
+    const bgT = G.stage ? (road.findSeg(G.z).i >= G.stage.start ? G.stage.theme : th) : th;
+    const hy = H / 2;
+    const gr = c.createLinearGradient(0, 0, 0, hy + 10);
+    gr.addColorStop(0, bgT.sky[0]); gr.addColorStop(1, bgT.sky[1]);
+    c.fillStyle = gr; c.fillRect(0, 0, W, hy + 20);
+    if (bgT.sun) {
+      const sx = W * 0.7 - ((G.bgX * 400) % W + W) % W * 0.3;
+      c.fillStyle = bgT.sun; c.beginPath(); c.arc(W * 0.72 - (G.bgX * 120 % 60), hy - 50, 16, 0, 7); c.fill();
+      void sx;
+    }
+    const b = bgFor(bgT);
+    const lift = -(road.findSeg(G.z).p1.y) * 0.002;
+    Road3D.drawLayer(c, b.far, W, H, G.bgX * 0.5, hy - 54 + Math.max(-20, Math.min(20, lift)), 64);
+    Road3D.drawLayer(c, b.near, W, H, G.bgX, hy - 18 + Math.max(-20, Math.min(20, lift * 1.5)), 30);
+    c.fillStyle = bgT.grass[0]; c.fillRect(0, hy + 10, W, H);
+    road.render(c, { x: G.x, z: G.z });
+    // the car
+    const steerF = G.steer < -0.3 ? 0 : G.steer > 0.3 ? 2 : 1;
+    const cw = 84, ch = cw * 38 / 72;
+    let cy = H - ch - 4 - (G.bounce || 0);
+    c.save();
+    c.translate(W / 2, cy + ch);
+    if (G.crash > 0) {
+      const k = 2.2 - G.crash;
+      c.translate(0, -Math.abs(Math.sin(k * 3.2)) * 40 * Math.max(0, 1 - k / 2));
+      c.rotate(k * 7);
+    } else if (G.spin > 0) {
+      c.scale(Math.cos(G.spin * 12) >= 0 ? 1 : -1, 1);
+    }
+    c.drawImage(PLAYER[G.crash > 0 || G.spin > 0 ? 1 : steerF], -cw / 2, -ch, cw, ch);
+    c.restore();
+  }
+
+  function drawHud(a) {
+    const c = a.ctx;
+    a.text('TIME', W / 2, 4, 8, '#ff0', 'center');
+    const tcol = G.time < 10 && Math.floor(G.t * 4) % 2 ? '#f33' : '#fff';
+    a.text(String(Math.ceil(G.time)).padStart(2, ' '), W / 2, 14, 16, tcol, 'center');
+    a.text('SCORE', 6, 4, 8, '#7cf');
+    a.text(String(a.score), 6, 14, 8, '#fff');
+    a.text('STAGE ' + G.stageNo, W - 6, 4, 8, '#7cf', 'right');
+    a.text(G.gear ? 'HIGH' : 'LOW', W - 6, 14, 8, G.gear ? '#f84' : '#8f8', 'right');
+    const kmh = Math.round(G.speed * KMH);
+    a.text(String(kmh).padStart(3, ' ') + 'KM', 6, H - 14, 8, '#fff');
+    // tach
+    const rpm = Math.min(1, G.speed / (G.gear ? MAX : LOW_MAX));
+    for (let i = 0; i < 12; i++) { c.fillStyle = i / 12 < rpm ? (i > 9 ? '#f33' : i > 6 ? '#ff0' : '#3f6') : 'rgba(255,255,255,.15)'; c.fillRect(6 + i * 5, H - 22, 4, 5); }
+    if (G.banner > 0 && Math.floor(G.t * 3) % 3) {
+      if (G.bannerText) a.text(G.bannerText, W / 2, 44, 8, '#ff0', 'center');
+      a.text(G.stage.theme.name, W / 2, 58, 8, '#fff', 'center');
+    }
+    if (G.banner <= 0) G.bannerText = '';
+    if (G.phase === 'timeup') a.text('TIME UP', W / 2, 80, 16, '#f33', 'center');
+    if (G.phase === 'goal') {
+      a.text('GOAL!', W / 2, 60, 24, '#ffd400', 'center');
+      a.text(G.stage.theme.name, W / 2, 92, 8, '#fff', 'center');
+      a.text('ROUTE ' + G.route.join('-'), W / 2, 106, 8, '#7cf', 'center');
+      if (G.goalT > 1.5) a.text('TIME BONUS ' + G.bonusShown, W / 2, 124, 8, '#ff0', 'center');
+    }
+    if (tiltRef.on) a.text('TILT', W - 6, H - 14, 8, '#7cf', 'right');
+  }
+
+  function drawRadio(a) {
+    const c = a.ctx;
+    c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#1a1a1a'; c.fillRect(40, 60, 240, 110);
+    c.strokeStyle = '#888'; c.lineWidth = 2; c.strokeRect(40, 60, 240, 110);
+    c.fillStyle = '#0c2a14'; c.fillRect(56, 74, 208, 34);
+    a.text('SELECT MUSIC', W / 2, 40, 8, '#ff0', 'center');
+    const s = STATIONS[G.station];
+    a.text(s.freq + ' FM', W / 2, 80, 8, '#6f8', 'center');
+    a.text(s.name, W / 2, 94, 8, '#6f8', 'center');
+    for (let i = 0; i < 3; i++) {
+      c.fillStyle = i === G.station ? '#ff7a3d' : '#444';
+      c.fillRect(70 + i * 64, 124, 52, 18);
+      a.text(String(i + 1), 96 + i * 64, 129, 8, '#fff', 'center');
+    }
+    a.text('< >  TUNE     GAS  GO', W / 2, 152, 8, '#ccc', 'center');
+    a.text(String(Math.ceil(G.radioT)), W - 30, 64, 8, '#f84', 'center');
+  }
+
+  window.__g = () => G;
+  window.__road = road;
+})();
+</script>
+</body>
+</html>

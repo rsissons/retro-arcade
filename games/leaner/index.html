@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lean Machine</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+<style>
+  .arc-btns { gap: 10px; }
+  .arc-btns .arc-round { width: 64px; height: 64px; }
+  .arc-pad-lr { width: 150px; }
+  .arc-pad-lr .arc-d-left, .arc-pad-lr .arc-d-right { width: 68px; }
+</style>
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script src="../../shared/road3d.js"></script>
+<script src="../../shared/roadart.js"></script>
+<script>
+(function () {
+  const W = 320, H = 224;
+  const P = Road3D.paint;
+  const { rng, PROP, CHEV, GATES, gates, bgFor } = RoadArt;
+  const AU = Arcade.Audio;
+  AU.load({
+    'lean-race': '../../assets/audio/lean-race.m4a', 'race-goal': '../../assets/audio/race-goal.m4a',
+    bike: '../../assets/sfx/bike.wav', skid: '../../assets/sfx/skid.wav', crash: '../../assets/sfx/crash.wav',
+    bump: '../../assets/sfx/bump.wav', fanfare: '../../assets/sfx/fanfare.wav',
+  });
+
+  // ---------- bikes: rear view, drawn upright and rotated when leaning ----------
+  function bike(suit, helmet, fairing, tuck) {
+    return P(34, 54, c => {
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(8, 50, 18, 4);
+      c.fillStyle = '#111'; c.fillRect(13, 36, 8, 17);                       // rear tyre
+      c.fillStyle = '#444'; c.fillRect(15, 38, 4, 13);
+      c.fillStyle = fairing; c.beginPath(); c.moveTo(8, 38); c.lineTo(11, 26); c.lineTo(23, 26); c.lineTo(26, 38); c.lineTo(21, 42); c.lineTo(13, 42); c.fill();
+      c.fillStyle = '#f33'; c.fillRect(13, 38, 8, 3);                          // tail light
+      c.fillStyle = '#999'; c.fillRect(22, 40, 5, 3);                          // exhaust
+      const up = tuck ? 6 : 0;
+      c.fillStyle = suit;                                                       // rider
+      c.beginPath(); c.moveTo(9, 30); c.lineTo(8, 16 + up); c.lineTo(12, 10 + up); c.lineTo(22, 10 + up); c.lineTo(26, 16 + up); c.lineTo(25, 30); c.fill();
+      c.fillRect(5, 16 + up, 4, 10); c.fillRect(25, 16 + up, 4, 10);            // arms
+      c.fillStyle = '#222'; c.fillRect(7, 28, 6, 8); c.fillRect(21, 28, 6, 8); // boots / legs
+      c.fillStyle = 'rgba(255,255,255,.35)'; c.fillRect(16, 12 + up, 2, 16);
+      c.fillStyle = helmet; c.beginPath(); c.arc(17, 7 + up, 6.5, 0, 7); c.fill();
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(11, 7 + up, 13, 2);
+    });
+  }
+  const ME = bike('#1a4fd8', '#f4f4f4', '#e02020', false), ME_TUCK = bike('#1a4fd8', '#f4f4f4', '#e02020', true);
+  const RIVALS = [['#f2c21b', '#222', '#1a1a1a'], ['#1ea34a', '#ffd400', '#f4f4f4'], ['#8a3fd1', '#fff', '#8a3fd1'], ['#e86d1a', '#1a4fd8', '#f4f4f4'], ['#eeeeee', '#e02020', '#e02020']]
+    .map(([s, h, f]) => bike(s, h, f, false));
+  const RIDER = P(16, 16, c => { c.fillStyle = '#1a4fd8'; c.fillRect(3, 5, 10, 8); c.fillStyle = '#f4f4f4'; c.beginPath(); c.arc(8, 4, 4, 0, 7); c.fill(); c.fillStyle = '#222'; c.fillRect(2, 12, 4, 4); c.fillRect(10, 12, 4, 4); });
+
+  // ---------- the course: five sections, one continuous road ----------
+  const T = (name, o) => Object.assign({ name, lane: '#ffffff', rumble: ['#ffffff', '#d8201c'], road: ['#6b6b6b', '#646464'] }, o);
+  const SECTIONS = [
+    T('SEASIDE SPRINT', { sky: ['#2f7fe8', '#a8dcff'], sun: '#fff6c0', far: 'sea', farCol: '#2a86d8', nearCol: '#e8d7a0', grass: ['#e8d9a8', '#dccb96'], fog: '#bfe3ff', props: { palm: 5, bush: 2, billboard: 1 }, curvy: 0.5, hilly: 0.3 }),
+    T('CANYON RUN', { sky: ['#3d8ee8', '#ffd9a0'], sun: '#fff0b0', far: 'mesa', farCol: '#b4532a', nearCol: '#d48a4a', grass: ['#d9a26a', '#cc955e'], fog: '#f2d2a8', props: { rock: 4, cactus: 3, redrock: 2 }, curvy: 0.7, hilly: 0.5 }),
+    T('DUSK CITY', { sky: ['#ff8a3d', '#ffd08a'], sun: '#fff1b5', far: 'city', farCol: '#7d5a8c', nearCol: '#8c7078', grass: ['#8a8f96', '#80858c'], fog: '#ffc89a', props: { building: 3, tower: 2, lamp: 4 }, curvy: 0.8, hilly: 0.3 }),
+    T('HIGH PASS', { sky: ['#5b8fd0', '#e6f0fa'], sun: null, far: 'peaks', farCol: '#8a9ab8', nearCol: '#3d6b4a', grass: ['#3f8a4a', '#377d42'], fog: '#dce8f4', props: { pine: 6, rock: 1 }, curvy: 1, hilly: 0.9 }),
+    T('MIDNIGHT LAP', { sky: ['#07051a', '#3a1a5a'], sun: null, far: 'city', farCol: '#1a1440', nearCol: '#2a1f4a', grass: ['#1d1a2e', '#191627'], fog: '#2a1f4a', road: ['#3a3a48', '#34343f'], lane: '#ff5cf0', rumble: ['#ff5cf0', '#23d8ff'], props: { nightbldg: 4, neonlamp: 5 }, curvy: 1.1, hilly: 0.4 }),
+  ];
+  const TIME = [52, 42, 40, 38, 36];
+
+  const road = Road3D.create({ width: W, height: H, lanes: 2, drawDist: 240, fogDensity: 3, rumbleLen: 3 });
+  const MAX = road.segLen * 60;       // 280 km/h
+  const KMH = 280 / MAX;
+  let G, A, tiltRef = { on: false, value: 0 };
+
+  function build() {
+    road.reset();
+    const R = rng(4242);
+    const marks = [];
+    SECTIONS.forEach((th, si) => {
+      const start = road.segs.length;
+      road.addRoad(10, 40, 10, 0, 0, th);
+      road.addSprite(start + 6, { img: si ? GATES.check : GATES.start, ww: 2.7, x: 0, gate: si ? 'check' : 'start', section: si });
+      marks.push(start);
+      let lastHill = 0;
+      while (road.segs.length < start + 1500) {
+        const curve = R() < 0.2 ? 0 : (R() < 0.5 ? -1 : 1) * (1.5 + R() * 5) * th.curvy;
+        let hill = R() < 0.5 ? 0 : (R() * 2 - 1) * 50 * th.hilly;
+        if (Math.abs(lastHill + hill) > 100) hill = -hill; lastHill += hill;
+        const s0 = road.segs.length;
+        road.addRoad(15 + Math.floor(R() * 30), 25 + Math.floor(R() * 70), 15 + Math.floor(R() * 30), curve, hill, th);
+        if (Math.abs(curve) > 2.5) for (let k = 0; k < 4; k++) road.addSprite(s0 - 30 + k * 8, { img: CHEV, ww: 0.32, x: curve > 0 ? -1.5 : 1.5, hit: 0.28, flip: curve > 0 });
+      }
+      road.addRoad(20, 40, 20, 0, -lastHill, th);
+      const bag = []; for (const k in th.props) for (let i = 0; i < th.props[k]; i++) bag.push(k);
+      for (let n = start + 12; n < road.segs.length; n += 3 + Math.floor(R() * 5)) {
+        if (road.segs[n].sprites.length) continue;
+        for (const side of [-1, 1]) {
+          if (R() < 0.35) continue;
+          const name = bag[Math.floor(R() * bag.length)], pr = PROP[name];
+          const far = /building|tower|nightbldg/.test(name);
+          road.addSprite(n, { img: pr.img, ww: pr.ww, x: side * (1.25 + pr.ww / 2 + (far ? 0.4 + R() * 1.5 : R() * 1.4)), hit: pr.hit, flip: side > 0 && R() < 0.5 });
+        }
+      }
+    });
+    const g = road.segs.length;
+    road.addRoad(10, 400, 10, 0, 0, SECTIONS[4]);
+    road.addSprite(g + 4, { img: GATES.goal, ww: 2.7, x: 0, gate: 'goal' });
+    return marks;
+  }
+
+  function rivalDraw(c) {
+    return (ctx, sx, sy, w) => {
+      const dw = 0.17 * w, dh = dw * 54 / 34;
+      if (dw < 0.5) return;
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(c.lean);
+      ctx.drawImage(c.img, -dw / 2, -dh, dw, dh); ctx.restore();
+    };
+  }
+  function spawnRival(z) {
+    const x = (Math.random() * 2 - 1) * 0.7;
+    const c = { z, x, lane: x, img: RIVALS[Math.floor(Math.random() * RIVALS.length)], hit: 0.1, speed: MAX * (0.5 + Math.random() * 0.35), lean: 0, drift: (Math.random() * 2 - 1) * 0.15 };
+    c.draw = rivalDraw(c);
+    road.cars.push(c);
+  }
+
+  A = Arcade.start({
+    id: 'leaner', title: 'LEAN MACHINE', subtitle: 'A TRIBUTE TO HANG-ON (1985)', color: '#ff3b3b',
+    width: W, height: H, bg: '#000',
+    help: ['LEFT/RIGHT LEAN', 'UP OR X THROTTLE  DOWN OR Z BRAKE', 'HOLD SPACE TO TUCK AT TOP SPEED', 'TOO FAST IN A BEND AND YOU RUN WIDE', 'MAKE EACH CHECKPOINT IN TIME'],
+    keys: { fire: ['ArrowUp', 'KeyX', 'KeyW'], down: ['ArrowDown', 'KeyZ', 'KeyS'], b: ['Space', 'KeyC', 'ShiftLeft', 'ShiftRight'], up: [] },
+    touch: { dpad: 'lr', buttons: [{ act: 'b', label: 'TUCK' }, { act: 'down', label: 'BRAKE' }, { act: 'fire', label: 'GAS' }] },
+    init() { gates(); tiltRef = Road3D.tilt(); G = { z: 0, x: 0, speed: MAX * 0.6, lean: 0, bgX: 0, sec: 0 }; G.marks = build(); spawnDemo(); },
+    attract(a, dt) {
+      G.z += G.speed * dt;
+      const seg = road.findSeg(G.z + road.playerZ);
+      G.lean += ((-seg.curve * 0.12) - G.lean) * dt * 3;
+      G.bgX += seg.curve * dt * 0.012;
+      moveRivals(dt);
+      if (G.z > road.length() - 300 * road.segLen) { G.z = 0; road.cars = []; spawnDemo(); }
+    },
+    drawAttract(a) { drawWorld(a); },
+    newGame(a) {
+      if (G && G.eng) G.eng.stop();
+      G = { z: 0, x: 0, speed: 0, lean: 0, time: TIME[0], bgX: 0, t: 0, sec: 0, crash: 0, phase: 'race', scoreAcc: 0, banner: 3, skidT: 0, goalT: 0, tuck: false, passed: 0 };
+      G.marks = build();
+      AU.music('lean-race');
+      G.eng = AU.loop('bike', { v: 0.2, rate: 0.6 });
+    },
+    update(a, dt) {
+      G.t += dt;
+      const seg = road.findSeg(G.z + road.playerZ);
+      const sp = G.speed / MAX;
+      if (G.phase === 'race') { G.time -= dt; if (G.time <= 0) { G.time = 0; G.phase = 'timeup'; G.goalT = 0; AU.stopMusic(1.5); } }
+
+      let gas = false, brake = false, steer = 0;
+      if (G.phase === 'race' && G.crash <= 0) {
+        gas = a.down('fire'); brake = a.down('down');
+        steer = (a.down('left') ? -1 : 0) + (a.down('right') ? 1 : 0);
+        if (tiltRef.on && !steer) steer = tiltRef.value;
+      }
+      if (G.phase === 'goal') { steer = -G.x * 2; }
+      G.tuck = G.phase === 'race' && a.down('b') && gas && sp > 0.93 && G.crash <= 0;
+      const top = G.tuck ? MAX * 1.08 : MAX;
+      if (gas) G.speed = G.speed > top ? G.speed - MAX * 0.2 * dt : Math.min(top, G.speed + MAX * (sp < 0.5 ? 0.3 : 0.16) * dt);
+      else if (brake) G.speed = Math.max(0, G.speed - MAX * 0.8 * dt);
+      else G.speed = Math.max(0, G.speed - MAX * 0.1 * dt);
+
+      // lean follows the bars; the bike goes where it leans
+      G.lean += (steer * (G.tuck ? 0.5 : 1) - G.lean) * Math.min(1, dt * 6);
+      if (G.crash > 0) {
+        G.crash -= dt; G.speed = Math.max(0, G.speed - MAX * 0.8 * dt);
+        G.x += G.slide * dt * sp * 2;
+        if (G.crash <= 0) { G.x = 0; G.speed = 0; G.lean = 0; }
+      } else {
+        const dx = dt * 2.4 * Math.min(1, sp * 1.5);
+        G.x += G.lean * dx;
+        G.x -= dx * sp * seg.curve * 0.36;
+        if (Math.abs(seg.curve) > 3 && sp > 0.75 && Math.abs(G.lean) > 0.7) { G.skidT -= dt; if (G.skidT <= 0) { AU.play('skid', { v: 0.25, rate: 1.3 }); G.skidT = 0.4; } }
+      }
+      if (Math.abs(G.x) > 1.05 && G.crash <= 0) { if (G.speed > MAX * 0.3) G.speed -= MAX * 0.8 * dt; G.wob = Math.random() * 2 * sp; } else G.wob = 0;
+      G.x = Math.max(-3, Math.min(3, G.x));
+      G.z += G.speed * dt;
+      G.bgX += seg.curve * sp * dt * 0.012;
+      const pz = G.z + road.playerZ;
+
+      // hitting things ends in a wipeout
+      const pw = 0.12;
+      const wipe = () => { G.crash = 2.6; G.slide = G.x > 0 ? 1 : -1; G.tuck = false; AU.play('crash', { v: 0.8 }); AU.play('skid', { v: 0.5 }); };
+      if (G.crash <= 0) for (const s of [seg, road.segs[seg.i + 1]]) {
+        if (!s) continue;
+        for (const o of s.sprites) if (o.hit && Math.abs(G.x - o.x) < (pw + o.hit) / 2) {
+          if (G.speed > MAX * 0.2) wipe(); else { G.speed = 0; AU.play('bump', { v: 0.6 }); G.x += G.x > o.x ? 0.1 : -0.1; }
+          break;
+        }
+      }
+      moveRivals(dt);
+      if (G.crash <= 0) for (const c of road.cars) {
+        const dz = c.z - pz;
+        if (dz > -30 && dz < 120 && Math.abs(G.x - c.x) < 0.16) {
+          if (G.speed - c.speed > MAX * 0.18) { wipe(); c.z += 400; }
+          else if (G.speed > c.speed) { G.speed = c.speed * 0.9; AU.play('bump', { v: 0.5 }); c.z = pz + 150; }
+        }
+        if (!c.counted && dz < -60) { c.counted = true; if (G.phase === 'race') { a.addScore(500); G.passed++; } }
+      }
+      road.cars = road.cars.filter(c => c.z > G.z - 400 && c.z < road.length() - road.segLen * 4);
+      if (G.phase === 'race' && road.cars.length < 12 && Math.random() < dt * 2.5) spawnRival(G.z + road.segLen * (100 + Math.random() * 120));
+
+      for (const s of [seg, road.segs[seg.i - 1]]) {
+        if (!s) continue;
+        for (const o of s.sprites) {
+          if (!o.gate || o.passed) continue;
+          o.passed = true;
+          if (o.gate === 'check') { G.sec = o.section; G.time += TIME[o.section]; G.banner = 3; AU.play('fanfare', { v: 0.8 }); a.addScore(Math.floor(G.time) * 1000); }
+          if (o.gate === 'goal') { G.phase = 'goal'; G.goalT = 0; G.bonus = Math.floor(G.time) * 20000; G.bonusShown = 0; AU.music('race-goal', { loop: false }); AU.play('fanfare', { v: 0.9 }); }
+        }
+      }
+      if (G.banner > 0) G.banner -= dt;
+      if (G.phase === 'race' && G.crash <= 0) {
+        G.scoreAcc += G.speed * KMH * dt * 12;
+        if (G.scoreAcc >= 10) { const n = Math.floor(G.scoreAcc / 10) * 10; a.addScore(n); G.scoreAcc -= n; }
+      }
+      if (G.eng) { G.eng.rate(0.6 + sp * 1.4 + (G.tuck ? 0.15 : 0)); G.eng.vol(G.crash > 0 ? 0.05 : 0.2); }
+      if (G.phase === 'timeup') { G.goalT += dt; if (G.goalT > 3.5 && G.speed < 50) end(a); }
+      if (G.phase === 'goal') {
+        G.goalT += dt; G.speed = Math.max(MAX * 0.2, G.speed - MAX * 0.3 * dt);
+        if (G.goalT > 1.5 && G.bonusShown < G.bonus) { const st = Math.min(G.bonus - G.bonusShown, Math.ceil(G.bonus * dt / 2.5 / 1000) * 1000); G.bonusShown += st; a.addScore(st); }
+        if (G.goalT > 8) end(a);
+      }
+    },
+    draw(a) { drawWorld(a); drawHud(a); },
+    onGameOver() { if (G.eng) { G.eng.stop(); G.eng = null; } },
+  });
+  function end(a) { if (G.eng) { G.eng.stop(); G.eng = null; } a.gameOver(); }
+  function spawnDemo() { for (let k = 0; k < 8; k++) spawnRival(road.segLen * (30 + k * 25)); }
+  function moveRivals(dt) {
+    for (const c of road.cars) {
+      const s = road.findSeg(c.z);
+      c.z += c.speed * dt;
+      c.lean += ((-s.curve * 0.1) - c.lean) * dt * 3;
+      c.lane += c.drift * dt; if (Math.abs(c.lane) > 0.75) c.drift = -c.drift;
+      c.x = c.lane;
+    }
+  }
+
+  function drawWorld(a) {
+    const c = a.ctx;
+    const seg = road.findSeg(G.z + road.playerZ);
+    const th = seg.theme;
+    const hy = H / 2;
+    const gr = c.createLinearGradient(0, 0, 0, hy + 10);
+    gr.addColorStop(0, th.sky[0]); gr.addColorStop(1, th.sky[1]);
+    c.fillStyle = gr; c.fillRect(0, 0, W, hy + 20);
+    if (th.sun) { c.fillStyle = th.sun; c.beginPath(); c.arc(W * 0.3 - (G.bgX * 120 % 60), hy - 56, 14, 0, 7); c.fill(); }
+    const b = bgFor(th);
+    const lift = Math.max(-20, Math.min(20, -(road.findSeg(G.z).p1.y) * 0.002));
+    Road3D.drawLayer(c, b.far, W, H, G.bgX * 0.5, hy - 54 + lift, 64);
+    Road3D.drawLayer(c, b.near, W, H, G.bgX, hy - 18 + lift * 1.5, 30);
+    c.fillStyle = th.grass[0]; c.fillRect(0, hy + 10, W, H);
+    road.render(c, { x: G.x, z: G.z });
+    // the bike
+    const bw = 44, bh = bw * 54 / 34;
+    c.save();
+    c.translate(W / 2, H - 6 - (G.wob || 0));
+    if (G.crash > 0) {
+      const k = 2.6 - G.crash;
+      c.save(); c.rotate(G.slide * Math.min(1.45, k * 4)); c.drawImage(ME, -bw / 2, -bh, bw, bh); c.restore();
+      // the rider tumbles clear
+      c.translate(G.slide * k * 50, -Math.abs(Math.sin(k * 5)) * 26 * Math.max(0, 1 - k / 2));
+      c.rotate(k * 9); c.drawImage(RIDER, -12, -12, 24, 24);
+    } else {
+      c.rotate(G.lean * 0.55);
+      c.drawImage(G.tuck ? ME_TUCK : ME, -bw / 2, -bh, bw, bh);
+    }
+    c.restore();
+  }
+
+  function drawHud(a) {
+    const c = a.ctx;
+    a.text('TIME', W / 2, 4, 8, '#ff0', 'center');
+    a.text(String(Math.ceil(G.time)), W / 2, 14, 16, G.time < 10 && Math.floor(G.t * 4) % 2 ? '#f33' : '#fff', 'center');
+    a.text('SCORE', 6, 4, 8, '#7cf'); a.text(String(a.score), 6, 14, 8, '#fff');
+    a.text('STAGE ' + (G.sec + 1), W - 6, 4, 8, '#7cf', 'right');
+    const kmh = Math.round(G.speed * KMH);
+    a.text(String(kmh).padStart(3, ' ') + 'KM', 6, H - 14, 8, G.tuck ? '#ff0' : '#fff');
+    const sp = Math.min(1, G.speed / MAX);
+    for (let i = 0; i < 12; i++) { c.fillStyle = i / 12 < sp ? (i > 9 ? '#f33' : i > 6 ? '#ff0' : '#3f6') : 'rgba(255,255,255,.15)'; c.fillRect(6 + i * 5, H - 22, 4, 5); }
+    if (G.tuck) a.text('TUCK', 72, H - 14, 8, '#ff0');
+    if (G.banner > 0 && Math.floor(G.t * 3) % 3) {
+      if (G.sec) a.text('EXTENDED PLAY', W / 2, 44, 8, '#ff0', 'center');
+      a.text(SECTIONS[G.sec].name, W / 2, 58, 8, '#fff', 'center');
+    }
+    if (G.phase === 'timeup') a.text('TIME UP', W / 2, 80, 16, '#f33', 'center');
+    if (G.phase === 'goal') {
+      a.text('GOAL!', W / 2, 60, 24, '#ffd400', 'center');
+      a.text('RIDERS PASSED ' + G.passed, W / 2, 96, 8, '#fff', 'center');
+      if (G.goalT > 1.5) a.text('TIME BONUS ' + G.bonusShown, W / 2, 112, 8, '#ff0', 'center');
+    }
+    if (tiltRef.on) a.text('TILT', W - 6, H - 14, 8, '#7cf', 'right');
+  }
+
+  window.__g = () => G;
+  window.__road = road;
+})();
+</script>
+</body>
+</html>

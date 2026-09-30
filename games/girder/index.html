@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Girder Climb</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script>
+(function () {
+  const W = 224, H = 256;
+  const AU = Arcade.Audio;
+  const S = Arcade.sprite, F = Arcade.flipX;
+  AU.load({
+    'girder-1': '../../assets/audio/girder-1.m4a', 'girder-2': '../../assets/audio/girder-2.m4a',
+    'girder-intro': '../../assets/audio/girder-intro.m4a', 'girder-rivets': '../../assets/audio/girder-rivets.m4a',
+    jump: '../../assets/sfx/jump.wav', land: '../../assets/sfx/land.wav', die: '../../assets/sfx/die.wav', fall: '../../assets/sfx/fall.wav',
+    smash: '../../assets/sfx/smash.wav', coin: '../../assets/sfx/coin.wav', powerup: '../../assets/sfx/powerup.wav', step: '../../assets/sfx/step.wav',
+    fanfare: '../../assets/sfx/fanfare.wav', hit: '../../assets/sfx/hit.wav', bump: '../../assets/sfx/bump.wav',
+  });
+
+  // ---------- sprites ----------
+  const HP = { Y: '#ffd21e', S: '#ffb98a', K: '#222', R: '#e02828', B: '#2a5ad8', W: '#fff', G: '#888' };
+  const hero = {
+    stand: S(['....YYYY....', '...YYYYYY...', '..YYYYYYYY..', '....SSSS....', '...SSKSKS...', '....SSSS....', '...RRBBRR...', '..RRRBBRRR..', '..SRRBBRRS..', '..S.BBBB.S..', '....BBBB....', '...BBBBBB...', '...BB..BB...', '...BB..BB...', '..KKK..KKK..', '..KKK..KKK..'], HP),
+    walk1: S(['....YYYY....', '...YYYYYY...', '..YYYYYYYY..', '....SSSS....', '...SSKSKS...', '....SSSS....', '...RRBBRR...', '..RRRBBRRS..', '..SRRBBRR...', '..S.BBBB....', '....BBBB....', '...BBBBBB...', '..BB....BB..', '.BB......BB.', '.KK......KK.', 'KKK......KKK'], HP),
+    walk2: S(['....YYYY....', '...YYYYYY...', '..YYYYYYYY..', '....SSSS....', '...SSKSKS...', '....SSSS....', '...RRBBRR...', '..SRRBBRRR..', '...RRBBRRS..', '....BBBB.S..', '....BBBB....', '....BBBB....', '....BBB.....', '....BBB.....', '....KKKK....', '....KKKK....'], HP),
+    jump: S(['....YYYY....', '...YYYYYY...', '..YYYYYYYY..', 'S...SSSS...S', 'S..SSKSKS..S', 'R...SSSS...R', 'RR.RRBBRR.RR', '.RRRRBBRRRR.', '....RBBR....', '....BBBB....', '...BBBBBB...', '..BB....BB..', '.BB......BB.', 'KK........KK', 'K..........K', '............'], HP),
+    climb1: S(['....YYYY....', '..SYYYYYY...', '..SYYYYYYY..', '..R.YYYY....', '..RRRRRRRR..', '...RRRRRRS..', '...RRBBRRS..', '...RBBBBR...', '....BBBB....', '....BBBB....', '...BBBBBB...', '...BB..BB...', '...BB..BB...', '...BB..KK...', '..KKK..KK...', '..KKK.......'], HP),
+    dead: S(['............', '............', '............', '............', '............', '............', '.YYY........', 'YYYYSSRRBBKK', 'YYYYSSRRBBKK', 'YYYYSSRRBBKK', '.YYY..RRBBKK', '............', '............', '............', '............', '............'], HP),
+  };
+  hero.climb2 = F(hero.climb1);
+  const HERO = {}; for (const k in hero) { HERO[k] = [F(hero[k]), hero[k]]; }   // [facing left, facing right]
+  const GIRL = [
+    S(['...YYYY...', '..YYYYYY..', '.YYSSSSYY.', '.YYSKSKYY.', '.YY.SSS.YY', '.Y.PPPP..Y', '..PPPPPP..', '.SPPWWPPS.', '.S.PPPP.S.', '...PPPP...', '..PPPPPP..', '.PPPPPPPP.', 'PPPPPPPPPP', '...S..S...', '..KK..KK..'], { Y: '#ffd21e', S: '#ffb98a', K: '#222', P: '#ff5cb8', W: '#fff' }),
+    S(['...YYYY...', '..YYYYYY..', '.YYSSSSYY.', '.YYSKSKYY.', 'YY..SSS.YY', 'Y..PPPP..Y', 'S.PPPPPP.S', '.SPPWWPPS.', '...PPPP...', '...PPPP...', '..PPPPPP..', '.PPPPPPPP.', 'PPPPPPPPPP', '...S..S...', '..KK..KK..'], { Y: '#ffd21e', S: '#ffb98a', K: '#222', P: '#ff5cb8', W: '#fff' }),
+  ];
+  const HAMMER = S(['.GGGGGG.', 'GGGGGGGG', '.GGGGGG.', '...YY...', '...YY...', '...YY...', '...YY...'], { G: '#aaa', Y: '#c8883a' });
+  const ITEMS = {
+    hat: S(['...PPPP...', '..PPPPPP..', '..PPPPPP..', 'PPPPPPPPPP', '.PPPPPPPP.'], { P: '#ff5cb8' }),
+    purse: S(['..KKKK..', '.K....K.', 'PPPPPPPP', 'PPPWWPPP', 'PPPPPPPP', 'PPPPPPPP'], { P: '#ff5cb8', K: '#822', W: '#ff0' }),
+    parasol: S(['...PPPP...', '.PPPPPPPP.', 'PPPPPPPPPP', '....K.....', '....K.....', '....K.....', '....K.K...', '.....K....'], { P: '#ff5cb8', K: '#822' }),
+  };
+  const PIE = S(['..TTTTTTTT..', '.TTWWWWWWTT.', 'GGGGGGGGGGGG', '.GGGGGGGGGG.'], { T: '#e8c070', W: '#fff4d0', G: '#9aa' });
+
+  // the ape: drawn with shapes so it can move smoothly between poses
+  function drawApe(c, x, y, pose, t) {
+    // x,y = feet centre. pose: idle | beat | grab | throw | climb | fall | grin
+    const br = '#8a4a1c', dk = '#5e300f', tan = '#e8b27a';
+    c.save(); c.translate(Math.round(x), Math.round(y));
+    if (pose === 'fall') c.rotate(Math.PI);
+    const bob = pose === 'beat' ? Math.sin(t * 20) * 1 : 0;
+    // legs
+    c.fillStyle = br; c.fillRect(-14, -10, 9, 10); c.fillRect(5, -10, 9, 10);
+    c.fillStyle = dk; c.fillRect(-16, -2, 12, 3); c.fillRect(4, -2, 12, 3);
+    // body
+    c.fillStyle = br; c.beginPath(); c.ellipse(0, -20 + bob, 17, 14, 0, 0, 7); c.fill();
+    c.fillStyle = tan; c.beginPath(); c.ellipse(0, -18 + bob, 9, 9, 0, 0, 7); c.fill();
+    // arms
+    c.strokeStyle = br; c.lineCap = 'round'; c.lineWidth = 7;
+    const arm = (side, ang) => { c.beginPath(); c.moveTo(side * 14, -26 + bob); c.lineTo(side * 14 + Math.cos(ang) * 14 * side, -26 + bob + Math.sin(ang) * 14); c.stroke(); };
+    if (pose === 'beat') { const s = Math.sin(t * 20) > 0 ? 1 : 0; arm(-1, s ? -0.2 : 0.9); arm(1, s ? 0.9 : -0.2); c.fillStyle = dk; c.fillRect(-8, -24, 16, 3); }
+    else if (pose === 'grab' || pose === 'throw') { arm(-1, pose === 'grab' ? 1.2 : -1.2); arm(1, pose === 'grab' ? 1.2 : -1.2); }
+    else if (pose === 'climb') { arm(-1, -1.4 + Math.sin(t * 8) * 0.4); arm(1, -1.4 - Math.sin(t * 8) * 0.4); }
+    else { arm(-1, 1.3); arm(1, 1.3); }
+    // head
+    c.fillStyle = br; c.beginPath(); c.arc(0, -37 + bob, 10, 0, 7); c.fill();
+    c.fillStyle = tan; c.beginPath(); c.ellipse(0, -34 + bob, 7, 5.5, 0, 0, 7); c.fill();
+    c.fillStyle = '#fff'; c.fillRect(-6, -41 + bob, 4, 3); c.fillRect(2, -41 + bob, 4, 3);
+    c.fillStyle = '#000'; c.fillRect(-4, -40 + bob, 2, 2); c.fillRect(3, -40 + bob, 2, 2);
+    c.fillStyle = dk; c.fillRect(-7, -43 + bob, 14, 2);
+    if (pose === 'grin' || pose === 'beat') { c.fillStyle = '#fff'; c.fillRect(-4, -33 + bob, 8, 2); }
+    else { c.fillStyle = '#000'; c.fillRect(-3, -32 + bob, 6, 1); }
+    c.restore();
+  }
+
+  function drawBarrel(c, b, t) {
+    c.save(); c.translate(Math.round(b.x), Math.round(b.y));
+    if (b.mode === 'ladder' || b.mode === 'held') {
+      c.fillStyle = b.blue ? '#3a6cf0' : '#c8742a'; c.fillRect(-7, -4, 14, 9);
+      c.fillStyle = b.blue ? '#1a3a9a' : '#6a3a14'; c.fillRect(-7, -4, 14, 2); c.fillRect(-7, 3, 14, 2); c.fillRect(-2, -4, 1, 9); c.fillRect(2, -4, 1, 9);
+    } else {
+      c.rotate(b.rot || 0);
+      c.fillStyle = b.blue ? '#3a6cf0' : '#c8742a'; c.beginPath(); c.arc(0, 0, 5, 0, 7); c.fill();
+      c.strokeStyle = b.blue ? '#1a3a9a' : '#6a3a14'; c.lineWidth = 1.5; c.beginPath(); c.arc(0, 0, 3, 0, 7); c.stroke();
+      c.beginPath(); c.moveTo(-5, 0); c.lineTo(5, 0); c.stroke();
+    }
+    c.restore();
+  }
+  function drawFire(c, x, y, t, col) {
+    const f = Math.floor(t * 12) % 2;
+    c.fillStyle = col || '#ff7a1a'; c.beginPath(); c.moveTo(x - 5, y); c.quadraticCurveTo(x - 6, y - 8, x - 1 + f, y - 13); c.quadraticCurveTo(x + 1, y - 7, x + 3 - f, y - 11); c.quadraticCurveTo(x + 6, y - 5, x + 5, y); c.fill();
+    c.fillStyle = '#ffe04a'; c.beginPath(); c.arc(x, y - 4, 3, 0, 7); c.fill();
+    c.fillStyle = '#000'; c.fillRect(x - 2, y - 5, 1, 1); c.fillRect(x + 1, y - 5, 1, 1);
+  }
+
+  // ---------- stages ----------
+  // floors: { x1, y1, x2, y2, kind, belt } top surface; ladders: { x, top, bot, broken }
+  const fl = (x1, y1, x2, y2, o) => Object.assign({ x1, y1, x2, y2, kind: 'girder', belt: 0 }, o || {});
+  function surf(f, x) { return f.x2 === f.x1 ? f.y1 : f.y1 + (x - f.x1) / (f.x2 - f.x1) * (f.y2 - f.y1); }
+
+  const STAGES = {
+    barrels() {
+      const floors = [
+        fl(0, 248, 224, 241), fl(0, 208, 208, 215), fl(16, 182, 224, 175), fl(0, 142, 208, 149), fl(16, 116, 224, 109), fl(0, 78, 208, 84),
+        fl(88, 50, 136, 50, { top: true }),
+      ];
+      const ladders = [[184, 1, 0], [88, 1, 0, 1], [40, 2, 1], [100, 2, 1], [164, 2, 1, 1], [176, 3, 2], [88, 3, 2, 1], [40, 4, 3], [112, 4, 3], [160, 4, 3, 1], [184, 5, 4], [96, 5, 4, 1], [128, 6, 5]];
+      return { name: '25 M', music: 'girder-1', floors, ladders, ape: { x: 36, f: 5 }, girl: { x: 112, f: 6 }, start: { x: 40, f: 0 },
+        drum: { x: 16, f: 0 }, hammers: [[30, 2], [170, 4]], goal: 'top' };
+    },
+    factory() {
+      const floors = [
+        fl(0, 248, 224, 248), fl(0, 208, 96, 208, { kind: 'belt', belt: 22 }), fl(128, 208, 224, 208, { kind: 'belt', belt: -22 }),
+        fl(0, 168, 100, 168, { kind: 'belt', belt: 26, rev: 1 }), fl(124, 168, 224, 168, { kind: 'belt', belt: -26, rev: 1 }),
+        fl(0, 128, 96, 128, { kind: 'belt', belt: -24, rev: 1 }), fl(128, 128, 224, 128, { kind: 'belt', belt: 24, rev: 1 }),
+        fl(8, 88, 216, 88, { kind: 'belt', belt: 18, rev: 1 }), fl(88, 50, 136, 50, { top: true }),
+      ];
+      const ladders = [[16, 1, 0], [200, 2, 0], [80, 3, 1], [144, 4, 2], [24, 5, 3], [200, 6, 4], [88, 7, 5], [136, 7, 6], [16, 7, 5, 1], [128, 8, 7]];
+      return { name: '50 M', music: 'girder-2', floors, ladders, ape: { x: 60, f: 7 }, girl: { x: 112, f: 8 }, start: { x: 30, f: 0 },
+        drum: { x: 112, f: 3, center: true }, hammers: [[176, 3], [40, 5]], items: [['hat', 190, 1], ['purse', 60, 5], ['parasol', 200, 7]], goal: 'top' };
+    },
+    elevators() {
+      const floors = [
+        fl(0, 248, 40, 248), fl(176, 248, 224, 248),
+        fl(84, 204, 112, 204), fl(84, 156, 112, 156), fl(84, 110, 112, 110),
+        fl(168, 208, 224, 208), fl(168, 168, 224, 168), fl(176, 128, 224, 128),
+        fl(0, 88, 60, 88), fl(76, 88, 216, 88), fl(96, 50, 140, 50, { top: true }), fl(0, 150, 36, 150), fl(0, 200, 36, 200),
+      ];
+      const ladders = [[20, 12, 0], [20, 11, 12], [196, 5, 1], [208, 6, 5], [192, 7, 6], [204, 9, 7], [124, 10, 9], [98, 3, 2], [98, 4, 3, 1]];
+      return { name: '75 M', music: 'girder-intro', floors, ladders, ape: { x: 26, f: 8 }, girl: { x: 118, f: 10 }, start: { x: 20, f: 0 },
+        elevators: [{ x1: 48, x2: 70, dir: -1 }, { x1: 132, x2: 154, dir: 1 }], hammers: [], items: [['parasol', 18, 11], ['purse', 98, 4]], goal: 'top' };
+    },
+    rivets() {
+      const floors = [], ladders = [], rivets = [];
+      const rows = [[248, 8, 216], [208, 16, 208], [168, 24, 200], [128, 32, 192], [88, 40, 184]];
+      rows.forEach(([y, a, b], i) => {
+        if (i === 0) { floors.push(fl(a, y, b, y)); return; }
+        const r1 = 56 + (i - 1) * 0, r2 = 164;
+        floors.push(fl(a, y, r1, y), fl(r1 + 8, y, r2, y), fl(r2 + 8, y, b, y));
+        const rf1 = fl(r1, y, r1 + 8, y, { rivet: true }), rf2 = fl(r2, y, r2 + 8, y, { rivet: true });
+        floors.push(rf1, rf2); rivets.push(rf1, rf2);
+      });
+      floors.push(fl(20, 56, 68, 56, { top: true, noWalk: true }));
+      // floors: 0 bottom, then per row (i) at 1+(i-1)*5 : left, mid, right, rivetL, rivetR
+      const row = i => 1 + (i - 1) * 5;
+      ladders.push([24, row(1), 0], [112, row(1) + 1, 0], [200, row(1) + 2, 0]);
+      ladders.push([32, row(2), row(1)], [96, row(2) + 1, row(1) + 1], [192, row(2) + 2, row(1) + 2]);
+      ladders.push([40, row(3), row(2)], [128, row(3) + 1, row(2) + 1], [184, row(3) + 2, row(2) + 2]);
+      ladders.push([48, row(4), row(3)], [100, row(4) + 1, row(3) + 1], [176, row(4) + 2, row(3) + 2]);
+      return { name: '100 M', music: 'girder-rivets', floors, ladders, rivets, ape: { x: 112, f: row(4) + 1 }, girl: { x: 44, f: floors.length - 1 },
+        start: { x: 30, f: 0 }, hammers: [[180, row(1) + 2], [44, row(3)]], items: [['hat', 190, row(2) + 2], ['parasol', 60, row(4)]], goal: 'rivets' };
+    },
+  };
+  const ORDER = ['barrels', 'factory', 'elevators', 'rivets'];
+
+  let G, A, bgCanvas = null;
+
+  function loadStage() {
+    const st = STAGES[ORDER[G.stageIx]]();
+    st.ladders = st.ladders.map(([x, top, bot, broken]) => {
+      const ft = st.floors[top], fb = st.floors[bot];
+      return { x, top: surf(ft, x), bot: surf(fb, x), ft, fb, broken: !!broken };
+    });
+    G.st = st;
+    G.barrels = []; G.fires = []; G.pies = []; G.springs = []; G.parts = [];
+    G.lifts = [];
+    if (st.elevators) st.elevators.forEach((e, k) => {
+      for (let i = 0; i < 5; i++) {
+        const f = fl(e.x1, 0, e.x2, 0, { kind: 'lift', lift: e });
+        f.y1 = f.y2 = 72 + i * 38;
+        G.lifts.push(f); st.floors.push(f);
+      }
+    });
+    G.hammers = st.hammers.map(([x, f]) => ({ x, y: surf(st.floors[f], x) - 18, taken: false }));
+    G.items = (st.items || []).map(([k, x, f]) => ({ k, x, y: surf(st.floors[f], x) - 2, taken: false }));
+    const sf = st.floors[st.start.f];
+    G.p = { x: st.start.x, y: surf(sf, st.start.x), vx: 0, vy: 0, mode: 'floor', floor: sf, ladder: null, face: 1, hammer: 0, walkT: 0, jumpY: 0, fallY: 0, scored: new Set() };
+    G.throwT = 1.2; G.apePose = 'beat'; G.apeT = 0; G.fireT = 4; G.pieT = 1; G.springT = 2;
+    G.bonus = Math.min(8000, 5000 + (G.level - 1) * 1000); G.bonusT = 0;
+    G.phase = 'intro'; G.phaseT = 1.8; G.deadT = 0; G.winT = 0;
+    G.firstBarrel = st.goal === 'top' && ORDER[G.stageIx] === 'barrels';
+    renderBg();
+  }
+
+  function renderBg() {
+    const st = G.st;
+    bgCanvas = document.createElement('canvas'); bgCanvas.width = W; bgCanvas.height = H;
+    const c = bgCanvas.getContext('2d');
+    // ladders behind girders
+    for (const L of st.ladders) {
+      c.fillStyle = '#35e0ff';
+      const top = L.top, bot = L.bot;
+      if (L.broken) {
+        c.fillRect(L.x - 4, top, 1, 8); c.fillRect(L.x + 3, top, 1, 8); c.fillRect(L.x - 4, bot - 8, 1, 8); c.fillRect(L.x + 3, bot - 8, 1, 8);
+        c.fillRect(L.x - 4, top + 3, 8, 1); c.fillRect(L.x - 4, bot - 4, 8, 1);
+      } else {
+        c.fillRect(L.x - 4, top, 1, bot - top); c.fillRect(L.x + 3, top, 1, bot - top);
+        for (let y = top + 3; y < bot; y += 4) c.fillRect(L.x - 4, y, 8, 1);
+      }
+    }
+    for (const f of st.floors) {
+      if (f.kind === 'lift' || f.rivet) continue;
+      drawGirder(c, f);
+    }
+    if (st.drum) drawDrumBase(c);
+  }
+  function drawGirder(c, f) {
+    const col = f.kind === 'belt' ? '#d8a020' : '#e0205a', dark = f.kind === 'belt' ? '#8a5a10' : '#8a1034';
+    for (let x = f.x1; x < f.x2; x += 8) {
+      const x2 = Math.min(f.x2, x + 8), y1 = Math.round(surf(f, x)), y2 = Math.round(surf(f, x2));
+      c.fillStyle = col; c.beginPath(); c.moveTo(x, y1); c.lineTo(x2, y2); c.lineTo(x2, y2 + 7); c.lineTo(x, y1 + 7); c.fill();
+      c.fillStyle = dark;
+      if (f.kind === 'belt') { c.fillRect(x, y1 + 2, x2 - x, 3); }
+      else { c.beginPath(); c.moveTo(x + 1, y1 + 2); c.lineTo(x + 4, y1 + 5); c.lineTo(x + 7, y1 + 2); c.lineTo(x + 7, y1 + 3); c.lineTo(x + 4, y1 + 6); c.lineTo(x + 1, y1 + 3); c.fill(); }
+    }
+  }
+  function drawDrumBase(c) {
+    const d = G.st.drum, f = G.st.floors[d.f], y = surf(f, d.x);
+    c.fillStyle = '#2a5ad8'; c.fillRect(d.x - 8, y - 16, 16, 16);
+    c.fillStyle = '#fff'; c.fillRect(d.x - 8, y - 14, 16, 2); c.fillRect(d.x - 8, y - 4, 16, 2);
+    c.fillStyle = '#9cf'; c.font = '5px "Press Start 2P"'; c.textAlign = 'center'; c.fillText('OIL', d.x, y - 6);
+  }
+
+  // ---------- helpers ----------
+  function floorAt(x, y, tol) {
+    let best = null, bd = 1e9;
+    for (const f of G.st.floors) {
+      if (f.gone || f.noWalk) continue;
+      if (x < f.x1 - 1 || x > f.x2 + 1) continue;
+      const d = Math.abs(surf(f, x) - y);
+      if (d <= tol && d < bd) { best = f; bd = d; }
+    }
+    return best;
+  }
+  function landingFloor(x, y0, y1) {
+    let best = null, by = 1e9;
+    for (const f of G.st.floors) {
+      if (f.gone || f.noWalk) continue;
+      if (x < f.x1 - 1 || x > f.x2 + 1) continue;
+      const s = surf(f, x);
+      if (s >= y0 - 1 && s <= y1 + 1 && s < by) { best = f; by = s; }
+    }
+    return best;
+  }
+  const lvlSpeed = () => 1 + Math.min(0.6, (G.level - 1) * 0.12);
+
+  function die(a, why) {
+    if (G.phase !== 'play') return;
+    G.phase = 'dead'; G.deadT = 0; G.p.mode = 'dead';
+    AU.stopMusic(0.1);
+    AU.play(why === 'fall' ? 'fall' : 'hit', { v: 0.8 });
+    AU.play('die', { v: 0.8, delay: 0.5 });
+  }
+
+  function addPts(a, n, x, y) { a.addScore(n); G.parts.push({ x, y, t: 1, text: String(n) }); }
+
+  // ---------- update ----------
+  A = Arcade.start({
+    id: 'girder', title: 'GIRDER CLIMB', subtitle: 'A TRIBUTE TO DONKEY KONG (1981)', color: '#e0205a',
+    width: W, height: H, bg: '#000',
+    help: ['ARROWS MOVE AND CLIMB', 'SPACE JUMP', '', 'JUMP BARRELS  100', 'HAMMER SMASH  300-800', 'CLIMB TO THE TOP', 'PULL EVERY RIVET ON 100 M'],
+    touch: { dpad: '4', buttons: [{ act: 'fire', label: 'JUMP' }] },
+    init() { G = { level: 1, stageIx: 0, lives: 3, t: 0 }; loadStage(); G.phase = 'demo'; },
+    attract(a, dt) { G.t += dt; },
+    drawAttract(a) { drawScene(a); },
+    newGame(a) {
+      G = { level: 1, stageIx: 0, lives: 3, t: 0, extra: false };
+      loadStage();
+    },
+    update(a, dt) {
+      G.t += dt;
+      for (let k = G.parts.length - 1; k >= 0; k--) { G.parts[k].t -= dt; G.parts[k].y -= dt * 8; if (G.parts[k].t <= 0) G.parts.splice(k, 1); }
+      if (G.phase === 'intro') { G.phaseT -= dt; if (G.phaseT <= 0) { G.phase = 'play'; AU.music(G.st.music); } return; }
+      if (G.phase === 'dead') {
+        G.deadT += dt;
+        if (G.deadT > 2.4) {
+          G.lives--;
+          if (G.lives <= 0) { a.gameOver(); return; }
+          loadStage();
+        }
+        return;
+      }
+      if (G.phase === 'win') {
+        G.winT += dt;
+        if (G.winT > 3.2) {
+          G.stageIx++;
+          if (G.stageIx >= ORDER.length) { G.stageIx = 0; G.level++; }
+          loadStage();
+        }
+        return;
+      }
+      // bonus timer
+      G.bonusT += dt;
+      if (G.bonusT >= 2) { G.bonusT = 0; G.bonus -= 100; if (G.bonus <= 0) { G.bonus = 0; die(a, 'time'); return; } }
+      if (!G.extra && a.score >= 10000) { G.extra = true; G.lives++; AU.play('powerup', { v: 0.7 }); }
+
+      updatePlayer(a, dt);
+      if (G.phase !== 'play') return;
+      updateBelts(dt);
+      updateLifts(a, dt);
+      updateApe(a, dt);
+      updateBarrels(a, dt);
+      updateFires(a, dt);
+      updatePies(a, dt);
+      updateSprings(a, dt);
+      checkPickups(a);
+      checkGoal(a);
+    },
+    draw(a) { drawScene(a); },
+  });
+
+  function updatePlayer(a, dt) {
+    const p = G.p;
+    const WALK = 42, CLIMB = 30;
+    const L = a.down('left'), R = a.down('right'), U = a.down('up'), D = a.down('down');
+    if (p.hammer > 0) { p.hammer -= dt; if (p.hammer <= 0) { p.hammer = 0; AU.music(G.st.music); } }
+    if (p.mode === 'floor') {
+      const f = p.floor;
+      p.vx = (R ? 1 : 0) - (L ? 1 : 0);
+      if (p.vx) p.face = p.vx;
+      p.x += p.vx * WALK * dt + (f.belt || 0) * dt;
+      p.x = Math.max(4, Math.min(W - 4, p.x));
+      if (p.vx) { p.walkT += dt; if (Math.floor(p.walkT * 6) !== Math.floor((p.walkT - dt) * 6)) AU.play('step', { v: 0.25 }); }
+      if (p.x < f.x1 - 3 || p.x > f.x2 + 3 || f.gone) {
+        const other = floorAt(p.x, p.y, 4);
+        if (other) { p.floor = other; }
+        else { p.mode = 'air'; p.vy = 0; p.vx = p.vx * 0.5; p.fallY = p.y; p.jumping = false; return; }
+      }
+      if (p.floor.rivet) pullRivet(a, p.floor);
+      p.y = surf(p.floor, p.x);
+      // ladders
+      if (!p.hammer) for (const Ld of G.st.ladders) {
+        if (Math.abs(p.x - Ld.x) > 4 || Ld.broken) continue;
+        if (U && Math.abs(p.y - Ld.bot) < 3) { p.mode = 'ladder'; p.ladder = Ld; p.x = Ld.x; p.y = Ld.bot - 1; return; }
+        if (D && Math.abs(p.y - Ld.top) < 3) { p.mode = 'ladder'; p.ladder = Ld; p.x = Ld.x; p.y = Ld.top + 1; return; }
+      }
+      if (a.pressed('fire') && !p.hammer) {
+        p.mode = 'air'; p.vy = -95; p.vx = p.vx; p.jumpY = p.y; p.fallY = p.y; p.jumping = true; p.scored = new Set();
+        AU.play('jump', { v: 0.5 });
+      }
+    } else if (p.mode === 'air') {
+      const y0 = p.y;
+      p.vy += 340 * dt;
+      p.x += p.vx * WALK * dt;
+      if (p.x < 4 || p.x > W - 4) { p.vx = -p.vx; p.x = Math.max(4, Math.min(W - 4, p.x)); }
+      p.y += p.vy * dt;
+      if (p.jumping) for (const b of G.barrels.concat(G.pies)) {
+        if (p.scored.has(b)) continue;
+        if (Math.abs(b.x - p.x) < 6 && b.y > p.y && b.y < p.y + 22) { p.scored.add(b); addPts(a, 100, p.x, p.y - 18); AU.play('coin', { v: 0.5 }); }
+      }
+      if (p.vy > 0) {
+        const f = landingFloor(p.x, y0, p.y);
+        if (f) {
+          const drop = surf(f, p.x) - (p.jumping ? p.jumpY : p.fallY);
+          p.floor = f; p.y = surf(f, p.x); p.mode = 'floor'; p.vx = 0;
+          if (drop > 22) { die(a, 'fall'); return; }
+          AU.play('land', { v: 0.6 });
+        }
+      }
+      if (p.y > H + 10) die(a, 'fall');
+    } else if (p.mode === 'ladder') {
+      const Ld = p.ladder;
+      if (U) p.y -= CLIMB * dt; else if (D) p.y += CLIMB * dt;
+      if ((U || D) && Math.floor(G.t * 6) !== Math.floor((G.t - dt) * 6)) AU.play('step', { v: 0.2, rate: 1.3 });
+      if (p.y <= Ld.top) { p.y = Ld.top; p.floor = Ld.ft; p.mode = 'floor'; }
+      else if (p.y >= Ld.bot) { p.y = Ld.bot; p.floor = Ld.fb; p.mode = 'floor'; }
+    }
+  }
+
+  function pullRivet(a, f) {
+    if (f.gone) return;
+    const p = G.p;
+    // the rivet pops once the hero has walked across it
+    if (!f.touched) { f.touched = p.x < (f.x1 + f.x2) / 2 ? -1 : 1; return; }
+    const side = p.x < (f.x1 + f.x2) / 2 ? -1 : 1;
+    if (side === f.touched) return;
+    f.gone = true;
+    addPts(a, 100, (f.x1 + f.x2) / 2, f.y1 - 10); AU.play('bump', { v: 0.7 });
+    // step off onto whichever floor is under the hero now
+    const other = floorAt(p.x + side * 2, p.y, 3);
+    if (other) { p.floor = other; p.x += side * 2; }
+  }
+
+  function updateBelts(dt) {
+    for (const f of G.st.floors) {
+      if (!f.rev) continue;
+      f.revT = (f.revT == null ? 4 + Math.random() * 5 : f.revT) - dt;
+      if (f.revT <= 0) { f.belt = -f.belt; f.revT = 4 + Math.random() * 5; }
+    }
+  }
+
+  function updateLifts(a, dt) {
+    for (const f of G.lifts) {
+      const e = f.lift;
+      const y0 = f.y1;
+      f.y1 = f.y2 = f.y1 + e.dir * 26 * dt;
+      if (e.dir < 0 && f.y1 < 72) { if (G.p.floor === f && G.p.mode === 'floor') die(a, 'crush'); f.y1 = f.y2 = 262; }
+      if (e.dir > 0 && f.y1 > 262) { if (G.p.floor === f && G.p.mode === 'floor') die(a, 'fall'); f.y1 = f.y2 = 72; }
+      void y0;
+    }
+  }
+
+  function updateApe(a, dt) {
+    G.apeT += dt;
+    const st = G.st;
+    if (st.goal === 'rivets') {
+      G.apePose = Math.sin(G.t * 0.7) > 0.8 ? 'beat' : 'idle';
+      G.apeX = (G.apeX || st.ape.x) + Math.sin(G.t * 0.8) * 10 * dt;
+      G.fireT -= dt;
+      const pulled = st.rivets.filter(r => r.gone).length;
+      if (G.fireT <= 0 && G.fires.length < Math.min(5, 1 + pulled + (G.level > 1 ? 1 : 0))) {
+        G.fireT = 3.5; const side = Math.random() < 0.5;
+        const f = floorAt(side ? 20 : 204, 248, 2);
+        G.fires.push({ x: side ? 20 : 204, y: 248, floor: f, vx: side ? 1 : -1, mode: 'floor', t: 0 });
+      }
+      return;
+    }
+    if (ORDER[G.stageIx] === 'barrels') {
+      G.throwT -= dt * lvlSpeed();
+      if (G.throwT < 0.45 && G.apePose !== 'grab') G.apePose = 'grab';
+      if (G.throwT <= 0) {
+        G.throwT = 1.6 + Math.random() * 1.4;
+        G.apePose = 'throw'; G.apeT = 0;
+        const blue = G.firstBarrel || Math.random() < 0.14;
+        if (G.firstBarrel) {
+          // the first barrel of the stage drops straight down the left side
+          G.barrels.push({ x: 22, y: 60, mode: 'drop', vy: 0, blue: true, rot: 0 });
+          G.firstBarrel = false;
+        } else {
+          const f = st.floors[st.ape.f];
+          G.barrels.push({ x: st.ape.x + 20, y: surf(f, st.ape.x + 20) - 5, mode: 'roll', floor: f, dir: 1, blue, rot: 0, decided: new Set() });
+        }
+      }
+      if (G.apePose === 'throw' && G.apeT > 0.35) G.apePose = Math.random() < 0.01 ? 'beat' : 'idle';
+    } else {
+      G.apePose = Math.floor(G.t / 3) % 3 === 0 ? 'beat' : 'idle';
+    }
+  }
+
+  function updateBarrels(a, dt) {
+    const sp = 58 * lvlSpeed();
+    const p = G.p;
+    for (let k = G.barrels.length - 1; k >= 0; k--) {
+      const b = G.barrels[k];
+      if (b.mode === 'drop') {
+        b.vy += 300 * dt; b.y += b.vy * dt; b.rot += dt * 8;
+        if (b.y >= 243) { b.y = 243; b.mode = 'roll'; b.floor = G.st.floors[0]; b.dir = -1; b.decided = new Set(); }
+      } else if (b.mode === 'roll') {
+        const f = b.floor;
+        const downhill = Math.sign(f.y2 - f.y1) || b.dir;
+        b.dir = downhill;
+        b.x += b.dir * sp * dt; b.rot += b.dir * dt * 12;
+        b.y = surf(f, b.x) - 5;
+        // ladders down from this floor
+        for (const L of G.st.ladders) {
+          if (L.ft !== f || b.decided.has(L) || Math.abs(b.x - L.x) > 1.5) continue;
+          b.decided.add(L);
+          const chase = p.y > b.y + 10 ? 0.25 : 0;
+          if (Math.random() < 0.22 + chase + (G.level - 1) * 0.05) { b.mode = 'ladder'; b.x = L.x; b.ladder = L; break; }
+        }
+        if (b.mode === 'roll' && (b.x < f.x1 - 2 || b.x > f.x2 + 2)) { b.mode = 'fall'; b.vy = 20; b.vx = b.dir * sp * 0.6; }
+        if (G.st.drum && f === G.st.floors[G.st.drum.f] && Math.abs(b.x - G.st.drum.x) < 9 && !G.st.drum.center) {
+          G.barrels.splice(k, 1);
+          if (b.blue && G.fires.length < 5) spawnFire(G.st.drum.x + 10, surf(f, G.st.drum.x + 10), f);
+          G.drumFlare = 0.6;
+          continue;
+        }
+      } else if (b.mode === 'ladder') {
+        b.y += 46 * lvlSpeed() * dt;
+        if (b.y >= b.ladder.bot - 5) { b.mode = 'roll'; b.floor = b.ladder.fb; b.y = b.ladder.bot - 5; b.decided = new Set([...b.decided]); }
+      } else if (b.mode === 'fall') {
+        const y0 = b.y;
+        b.vy += 300 * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+        const f = landingFloor(b.x, y0 + 5, b.y + 5);
+        if (f && f !== b.floor) { b.floor = f; b.mode = 'roll'; b.y = surf(f, b.x) - 5; }
+        if (b.y > H + 20 || b.x < -20 || b.x > W + 20) { G.barrels.splice(k, 1); continue; }
+      }
+      if (hitPlayer(b.x, b.y, 5)) { if (smash(a, b, k, G.barrels)) continue; die(a, 'hit'); return; }
+      if (hammerHits(b.x, b.y)) smash(a, b, k, G.barrels);
+    }
+  }
+  function spawnFire(x, y, f) { G.fires.push({ x, y, floor: f, vx: 1, mode: 'floor', t: 0 }); }
+
+  function hitPlayer(x, y, r) {
+    const p = G.p;
+    if (p.mode === 'dead') return false;
+    return Math.abs(x - p.x) < r + 3 && y > p.y - 15 - r && y < p.y + r - 1;
+  }
+  function hammerHits(x, y) {
+    const p = G.p;
+    if (!p.hammer) return false;
+    const up = Math.floor(G.t * 7) % 2 === 0;
+    const hx = up ? p.x : p.x + p.face * 11, hy = up ? p.y - 22 : p.y - 8;
+    return Math.abs(x - hx) < 9 && Math.abs(y - hy) < 9;
+  }
+  function smash(a, obj, k, list) {
+    if (!G.p.hammer) return false;
+    list.splice(k, 1);
+    addPts(a, [300, 500, 800][Math.floor(Math.random() * 3)], obj.x, obj.y - 8);
+    AU.play('smash', { v: 0.6 });
+    G.parts.push({ x: obj.x, y: obj.y, t: 0.4, burst: true });
+    return true;
+  }
+
+  function updateFires(a, dt) {
+    const sp = 24 * lvlSpeed(), p = G.p;
+    for (let k = G.fires.length - 1; k >= 0; k--) {
+      const e = G.fires[k];
+      e.t += dt;
+      if (e.mode === 'floor') {
+        const f = e.floor;
+        if (!f || f.gone) { e.mode = 'fall'; e.vy = 0; continue; }
+        if (Math.random() < dt * 0.3) e.vx = p.x > e.x ? 1 : -1;
+        e.x += e.vx * sp * dt + (f.belt || 0) * dt;
+        if (e.x < f.x1 + 2) { e.x = f.x1 + 2; e.vx = 1; } if (e.x > f.x2 - 2) { e.x = f.x2 - 2; e.vx = -1; }
+        e.y = surf(f, e.x);
+        for (const L of G.st.ladders) {
+          if (L.broken || Math.abs(e.x - L.x) > 1) continue;
+          if (e.cool > 0) break;
+          const wantUp = p.y < e.y - 8;
+          if (Math.abs(e.y - L.bot) < 3 && (wantUp ? Math.random() < 0.5 : Math.random() < 0.12)) { e.mode = 'ladder'; e.L = L; e.dy = -1; e.x = L.x; break; }
+          if (Math.abs(e.y - L.top) < 3 && Math.random() < (wantUp ? 0.08 : 0.35)) { e.mode = 'ladder'; e.L = L; e.dy = 1; e.x = L.x; break; }
+        }
+        e.cool = (e.cool || 0) - dt;
+      } else if (e.mode === 'ladder') {
+        e.y += e.dy * sp * 0.7 * dt;
+        if (e.y <= e.L.top) { e.y = e.L.top; e.floor = e.L.ft; e.mode = 'floor'; e.cool = 1; }
+        if (e.y >= e.L.bot) { e.y = e.L.bot; e.floor = e.L.fb; e.mode = 'floor'; e.cool = 1; }
+      } else {
+        const y0 = e.y; e.vy += 300 * dt; e.y += e.vy * dt;
+        const f = landingFloor(e.x, y0, e.y); if (f) { e.floor = f; e.mode = 'floor'; e.y = surf(f, e.x); }
+        if (e.y > H + 10) { G.fires.splice(k, 1); continue; }
+      }
+      if (hitPlayer(e.x, e.y - 5, 5)) { if (smash(a, e, k, G.fires)) continue; die(a, 'hit'); return; }
+      if (hammerHits(e.x, e.y - 5)) smash(a, e, k, G.fires);
+    }
+  }
+
+  function updatePies(a, dt) {
+    if (ORDER[G.stageIx] !== 'factory') return;
+    G.pieT -= dt * lvlSpeed();
+    if (G.pieT <= 0) {
+      G.pieT = 1.4 + Math.random() * 1.2;
+      const belts = G.st.floors.filter(f => f.kind === 'belt' && f.y1 !== 88);
+      const f = belts[Math.floor(Math.random() * belts.length)];
+      const x = f.belt > 0 ? f.x1 + 4 : f.x2 - 4;
+      if (Math.abs(x - G.p.x) > 24 || Math.abs(f.y1 - G.p.y) > 4) G.pies.push({ x, y: f.y1 - 3, floor: f });
+    }
+    G.fireT -= dt;
+    if (G.fireT <= 0 && G.fires.length < 1 + Math.min(3, G.level)) { G.fireT = 6; const d = G.st.drum, f = G.st.floors[d.f]; spawnFire(d.x + (Math.random() < 0.5 ? -12 : 12), f.y1, f); }
+    for (let k = G.pies.length - 1; k >= 0; k--) {
+      const pi = G.pies[k], f = pi.floor;
+      pi.x += f.belt * dt * 1.2;
+      if (pi.x < f.x1 - 4 || pi.x > f.x2 + 4) { G.pies.splice(k, 1); continue; }
+      if (G.st.drum.center && f.y1 === 168 && Math.abs(pi.x - G.st.drum.x) < 14) { G.pies.splice(k, 1); G.drumFlare = 0.5; continue; }
+      if (hitPlayer(pi.x, pi.y, 5)) { if (smash(a, pi, k, G.pies)) continue; die(a, 'hit'); return; }
+      if (hammerHits(pi.x, pi.y)) smash(a, pi, k, G.pies);
+    }
+  }
+
+  function updateSprings(a, dt) {
+    if (ORDER[G.stageIx] !== 'elevators') return;
+    G.springT -= dt * lvlSpeed();
+    if (G.springT <= 0) { G.springT = 1.8 + Math.random() * 1.2; G.springs.push({ x: 44, y: 80, t: 0, drop: false, vy: 0 }); G.apePose = 'throw'; G.apeT = 0; }
+    for (let k = G.springs.length - 1; k >= 0; k--) {
+      const s = G.springs[k];
+      s.t += dt;
+      if (!s.drop) {
+        s.x += 52 * lvlSpeed() * dt;
+        s.y = 86 - Math.abs(Math.sin(s.t * 5)) * 18;
+        if (s.x > 186) { s.drop = true; s.vy = 0; AU.play('jump', { v: 0.3, rate: 0.6 }); }
+      } else { s.vy += 280 * dt; s.y += s.vy * dt; if (s.y > H + 10) { G.springs.splice(k, 1); continue; } }
+      if (hitPlayer(s.x, s.y, 5)) { die(a, 'hit'); return; }
+    }
+    // fireballs patrol the middle ledges
+    if (!G.fires.length) { spawnFire(98, 156, G.st.floors[3]); spawnFire(200, 168, G.st.floors[6]); }
+  }
+
+  function checkPickups(a) {
+    const p = G.p;
+    for (const h of G.hammers) {
+      if (h.taken) continue;
+      if (Math.abs(h.x - p.x) < 7 && p.y - 20 < h.y + 6 && p.y > h.y) {
+        h.taken = true; p.hammer = 9; AU.play('powerup', { v: 0.7 });
+        if (p.mode === 'air') { p.vy = Math.max(p.vy, 0); }
+      }
+    }
+    for (const it of G.items) {
+      if (it.taken) continue;
+      if (Math.abs(it.x - p.x) < 8 && Math.abs(it.y - p.y) < 12) { it.taken = true; addPts(a, [300, 500, 800][Math.min(2, G.level - 1)], it.x, it.y - 12); AU.play('coin', { v: 0.7 }); }
+    }
+  }
+
+  function checkGoal(a) {
+    const st = G.st, p = G.p;
+    const won = st.goal === 'top' ? (p.mode === 'floor' && p.floor.top) : st.rivets.every(r => r.gone);
+    if (!won) return;
+    G.phase = 'win'; G.winT = 0;
+    a.addScore(G.bonus);
+    G.parts.push({ x: W / 2, y: 40, t: 2.5, text: 'BONUS ' + G.bonus });
+    AU.stopMusic(0.2);
+    AU.play('fanfare', { v: 0.9 });
+  }
+
+  // ---------- draw ----------
+  function drawScene(a) {
+    const c = a.ctx, st = G.st, p = G.p;
+    if (bgCanvas) c.drawImage(bgCanvas, 0, 0);
+    // belts' moving marks
+    for (const f of st.floors) {
+      if (f.kind === 'belt') {
+        c.fillStyle = '#fff4';
+        const off = ((G.t * f.belt) % 8 + 8) % 8;
+        for (let x = f.x1 + off; x < f.x2; x += 8) c.fillRect(Math.round(x), f.y1 + 1, 2, 1);
+      }
+      if (f.kind === 'lift') { c.fillStyle = '#e0205a'; c.fillRect(f.x1, Math.round(f.y1), f.x2 - f.x1, 6); c.fillStyle = '#8a1034'; c.fillRect(f.x1, Math.round(f.y1) + 2, f.x2 - f.x1, 2); }
+      if (f.rivet && !f.gone) { c.fillStyle = '#e0205a'; c.fillRect(f.x1, f.y1, 8, 7); c.fillStyle = '#ffd21e'; c.fillRect(f.x1 + 1, f.y1 - 3, 6, 10); }
+    }
+    if (st.elevators) for (const e of st.elevators) { c.fillStyle = '#35e0ff55'; c.fillRect((e.x1 + e.x2) / 2 - 1, 64, 2, 196); c.fillStyle = '#e0205a'; c.fillRect(e.x1 - 2, 60, e.x2 - e.x1 + 4, 6); c.fillRect(e.x1 - 2, 250, e.x2 - e.x1 + 4, 6); }
+    // oil drum flames
+    if (st.drum) {
+      const d = st.drum, y = surf(st.floors[d.f], d.x) - 16;
+      if (d.center) { c.fillStyle = '#2a5ad8'; c.fillRect(d.x - 8, y, 16, 16); c.fillStyle = '#fff'; c.fillRect(d.x - 8, y + 2, 16, 2); }
+      drawFire(c, d.x - 3, y, G.t, G.drumFlare > 0 ? '#ffe04a' : '#ff7a1a'); drawFire(c, d.x + 4, y + 1, G.t + 0.3);
+      if (G.drumFlare > 0) G.drumFlare -= 1 / 60;
+    }
+    // stacked barrels next to the ape on 25 m
+    if (ORDER[G.stageIx] === 'barrels') for (const [dx, dy] of [[-30, 0], [-22, 0], [-30, -9], [-22, -9]]) drawBarrel(c, { x: st.ape.x + dx + 4, y: surf(st.floors[st.ape.f], st.ape.x) + dy - 5, mode: 'held' }, G.t);
+    // girl
+    const gf = st.floors[st.girl.f];
+    c.drawImage(GIRL[Math.floor(G.t * 2) % 2], st.girl.x - 5, gf.y1 - 15);
+    if (G.phase === 'play' && Math.floor(G.t) % 4 === 0) a.text('HELP!', st.girl.x + 8, gf.y1 - 24, 6, '#fff');
+    // ape
+    let apeX = G.apeX || st.ape.x, apeY = surf(st.floors[st.ape.f], st.ape.x);
+    let pose = G.apePose || 'idle';
+    if (G.phase === 'win' && st.goal === 'rivets') { pose = 'fall'; apeY = Math.min(248, apeY + G.winT * 80) + (G.winT > 2 ? 0 : 40); }
+    else if (G.phase === 'win') { pose = 'climb'; apeY -= G.winT * 20; }
+    drawApe(c, apeX, apeY, pose, G.t);
+    if (G.phase === 'win' && st.goal === 'rivets' && G.winT > 1.2) { c.fillStyle = '#ff5cb8'; c.font = '10px sans-serif'; c.fillText('♥', W / 2 - 4, 44); }
+    // pickups
+    for (const h of G.hammers) if (!h.taken) c.drawImage(HAMMER, h.x - 4, h.y - 3);
+    for (const it of G.items) if (!it.taken) { const img = ITEMS[it.k]; c.drawImage(img, it.x - img.width / 2, it.y - img.height); }
+    for (const pi of G.pies) c.drawImage(PIE, Math.round(pi.x - 6), Math.round(pi.y - 2));
+    for (const s of G.springs) { c.fillStyle = '#35e0ff'; for (let k = 0; k < 4; k++) c.fillRect(Math.round(s.x) - 5 + (k % 2), Math.round(s.y) - 8 + k * 2, 10, 1); c.fillStyle = '#e0205a'; c.fillRect(Math.round(s.x) - 5, Math.round(s.y) - 10, 10, 2); c.fillRect(Math.round(s.x) - 5, Math.round(s.y), 10, 2); }
+    for (const b of G.barrels) drawBarrel(c, b, G.t);
+    for (const e of G.fires) drawFire(c, Math.round(e.x), Math.round(e.y), G.t + e.x);
+    // hero
+    if (p) {
+      const fi = p.face > 0 ? 1 : 0;
+      let img;
+      if (p.mode === 'dead') {
+        if (G.deadT < 1) { img = [HERO.stand[1], HERO.climb1[1], HERO.stand[0], HERO.climb2[1]][Math.floor(G.deadT * 12) % 4]; }
+        else img = HERO.dead[1];
+      } else if (p.mode === 'ladder') img = Math.floor(p.y / 4) % 2 ? HERO.climb1[1] : HERO.climb2[1];
+      else if (p.mode === 'air') img = HERO.jump[fi];
+      else if (p.vx) img = [HERO.walk1, HERO.stand, HERO.walk2, HERO.stand][Math.floor(p.walkT * 10) % 4][fi];
+      else img = HERO.stand[fi];
+      c.drawImage(img, Math.round(p.x - 6), Math.round(p.y - 16));
+      if (p.hammer > 0 && p.mode !== 'dead') {
+        const up = Math.floor(G.t * 7) % 2 === 0;
+        c.save();
+        if (up) c.drawImage(HAMMER, Math.round(p.x - 4), Math.round(p.y - 28));
+        else { c.translate(Math.round(p.x + p.face * 12), Math.round(p.y - 10)); c.rotate(p.face * Math.PI / 2); c.drawImage(HAMMER, -4, -4); }
+        c.restore();
+      }
+    }
+    for (const q of G.parts) {
+      if (q.burst) { c.strokeStyle = '#fff'; c.beginPath(); c.arc(q.x, q.y, (0.4 - q.t) * 30, 0, 7); c.stroke(); }
+      else a.text(q.text, q.x, q.y, 6, '#fff', 'center');
+    }
+    // HUD
+    a.text('1UP', 16, 4, 8, '#f33'); a.text(String(a.score).padStart(6, '0'), 8, 14, 8, '#fff');
+    a.text('HIGH SCORE', W / 2, 4, 8, '#f33', 'center'); a.text(String(a.hi).padStart(6, '0'), W / 2, 14, 8, '#fff', 'center');
+    c.strokeStyle = '#35e0ff'; c.lineWidth = 1; c.strokeRect(W - 50.5, 24.5, 44, 18);
+    a.text('BONUS', W - 28, 26, 6, '#35e0ff', 'center'); a.text(String(G.bonus), W - 28, 34, 8, G.bonus <= 1000 ? '#f33' : '#fff', 'center');
+    a.text('L=' + String(G.level).padStart(2, '0'), W - 6, 4, 8, '#35e0ff', 'right');
+    for (let k = 0; k < Math.min(5, (G.lives || 1) - 1); k++) c.drawImage(HERO.stand[1], W - 50 + k * 9, 46, 8, 11);
+    if (G.phase === 'intro') { c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(0, 100, W, 50); a.text(st.name, W / 2, 112, 16, '#fff', 'center'); a.text('HOW HIGH CAN YOU CLIMB?', W / 2, 134, 6, '#ffd21e', 'center'); }
+  }
+
+  window.__g = () => G;
+  window.__load = i => { G.stageIx = i; loadStage(); };
+})();
+</script>
+</body>
+</html>
