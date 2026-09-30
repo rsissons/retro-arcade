@@ -46,7 +46,7 @@
     G.cam = { x: 0, y: name === 'space' ? 0 : name === 'surface' ? 40 : 30, z: 0 };
     if (name === 'space') G.left = 8 + G.wave * 2;
     if (name === 'surface') G.surfT = 22;
-    if (name === 'trench') { G.trenchLen = 3200 + G.wave * 400; G.speed = 260 + G.wave * 30; G.cat = []; for (let z = 500; z < G.trenchLen - 300; z += 260 - Math.min(120, G.wave * 20)) G.cat.push({ z, y: 12 + Math.random() * 40, h: 8 }); G.turrets = []; for (let z = 400; z < G.trenchLen - 300; z += 180) G.turrets.push({ z, side: Math.random() < 0.5 ? -1 : 1, y: 10 + Math.random() * 40, fireT: 0 }); G.port = { z: G.trenchLen }; }
+    if (name === 'trench') { G.trenchLen = 3200 + G.wave * 400; G.speed = 260 + G.wave * 30; G.cat = []; for (let z = 600; z < G.trenchLen - 300; z += 440 - Math.min(200, G.wave * 40)) G.cat.push({ z, y: 12 + Math.random() * 40, h: 8 }); G.turrets = []; for (let z = 500; z < G.trenchLen - 300; z += 260 - Math.min(100, G.wave * 20)) G.turrets.push({ z, side: Math.random() < 0.5 ? -1 : 1, y: 10 + Math.random() * 40, fireT: 0 }); G.port = { z: G.trenchLen }; }
   }
 
   function hitShield(a) {
@@ -157,7 +157,7 @@
       for (const f of G.fire) {
         f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
         if (G.phase === 'space') { f.x -= steerX * 160 * dt; f.y -= steerY * 120 * dt; }
-        if (f.z - G.cam.z < 12 && !f.dead) { f.dead = true; if (Math.hypot(f.x - G.cam.x, f.y - G.cam.y) < 40) hitShield(a); }
+        if (f.z - G.cam.z < 12 && !f.dead) { f.dead = true; if (Math.hypot(f.x - G.cam.x, f.y - G.cam.y) < 28) hitShield(a); }
       }
       G.fire = (G.fire || []).filter(f => !f.dead);
       if (G.missed > 0) G.missed -= dt;
