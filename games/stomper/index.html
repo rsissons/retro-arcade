@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>City Stomper</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script>
+(function () {
+  const W = 320, H = 224, GROUND = 204, CELL = 16;
+  const AU = Arcade.Audio;
+  AU.load({
+    music: '../../assets/audio/smash-city.m4a',
+    punch: '../../assets/sfx/punch.wav', smash: '../../assets/sfx/smash.wav', crash: '../../assets/sfx/crash.wav', growl: '../../assets/sfx/growl.wav',
+    shot: '../../assets/sfx/shot.wav', coin: '../../assets/sfx/coin.wav', hit: '../../assets/sfx/hit.wav', boom: '../../assets/sfx/boom.wav',
+    jump: '../../assets/sfx/jump.wav', land: '../../assets/sfx/land.wav', fanfare: '../../assets/sfx/fanfare.wav', scream: '../../assets/sfx/scream.wav',
+  });
+  const CITIES = ['PEORIA', 'BOISE', 'TULSA', 'FRESNO', 'OMAHA', 'RENO', 'MOBILE', 'EUGENE', 'SPOKANE', 'BUFFALO'];
+  const BRICK = ['#9a4a3a', '#6a7a8a', '#b8905a', '#5a6a4a', '#8a5a7a', '#4a5a7a'];
+
+  let G, A;
+
+  // ---------- level ----------
+  function newCity() {
+    const n = 3 + (G.day > 3 ? 1 : 0);
+    G.blds = [];
+    const slots = n === 3 ? [36, 136, 236] : [18, 96, 174, 252];
+    for (let i = 0; i < n; i++) {
+      const cols = 3 + Math.floor(Math.random() * 2), rows = 5 + Math.floor(Math.random() * Math.min(5, 2 + G.day));
+      const b = { x: slots[i] + (n === 3 ? 0 : 0), cols, rows, w: cols * CELL, h: rows * CELL, col: BRICK[Math.floor(Math.random() * BRICK.length)], sink: 0, down: false, cells: [] };
+      for (let r = 0; r < rows; r++) { const row = []; for (let c = 0; c < cols; c++) row.push({ dmg: 0, who: null, whoT: 0 }); b.cells.push(row); }
+      b.top = () => GROUND - b.h + b.sink;
+      G.blds.push(b);
+    }
+    G.shots = []; G.foes = []; G.parts = []; G.spawnT = 3; G.heliT = 8; G.tankT = 12;
+    G.banner = 2.6; G.clear = 0;
+    const m = G.m;
+    m.x = 10; m.y = GROUND; m.state = 'ground'; m.vx = 0; m.vy = 0; m.b = null;
+  }
+
+  // ---------- helpers ----------
+  const bldAtX = x => G.blds.find(b => !b.down && x >= b.x && x <= b.x + b.w);
+  function cellAt(b, x, y) {
+    const c = Math.floor((x - b.x) / CELL), r = Math.floor((y - b.top()) / CELL);
+    if (c < 0 || c >= b.cols || r < 0 || r >= b.rows) return null;
+    return { c, r, cell: b.cells[r][c] };
+  }
+  function damageTotal(b) { let s = 0; for (const row of b.cells) for (const c of row) s += c.dmg; return s; }
+  function hurt(a, n) {
+    const m = G.m;
+    if (m.hurtT > 0 || m.state === 'dead') return;
+    m.health -= n; m.hurtT = 0.5;
+    AU.play('hit', { v: 0.6 });
+    if (m.health <= 0) { m.health = 0; m.state = 'dead'; m.deadT = 0; AU.play('growl', { v: 0.8, rate: 0.8 }); }
+  }
+
+  // ---------- monster art: a big green lizard drawn from shapes ----------
+  function drawMonster(c, m, t) {
+    c.save(); c.translate(Math.round(m.x), Math.round(m.y));
+    const f = m.face;
+    c.scale(f, 1);
+    const flash = m.hurtT > 0 && Math.floor(t * 20) % 2;
+    const body = flash ? '#fff' : '#3fa04a', dark = flash ? '#ddd' : '#2a6a30', belly = flash ? '#fff' : '#d8d080';
+    if (m.state === 'dead') {
+      // shrinks back to a very embarrassed human
+      const k = Math.min(1, m.deadT / 1.2);
+      if (k < 1) { c.scale(1 - k * 0.7, 1 - k * 0.7); }
+      else { c.fillStyle = '#ffb98a'; c.fillRect(-3, -14, 6, 6); c.fillStyle = '#fff'; c.fillRect(-3, -8, 6, 6); c.fillStyle = '#ffb98a'; c.fillRect(-3, -2, 2, 2); c.fillRect(1, -2, 2, 2); c.restore(); return; }
+    }
+    const climbing = m.state === 'climb';
+    const walk = m.state === 'ground' || m.state === 'roof' ? Math.sin(m.walkT * 10) : 0;
+    // tail
+    c.fillStyle = body; c.beginPath(); c.moveTo(-8, -12); c.quadraticCurveTo(-26, -8 + walk * 2, -30, climbing ? 4 : -2); c.lineTo(-24, -4); c.quadraticCurveTo(-16, -6, -6, -6); c.fill();
+    // legs
+    c.fillStyle = dark; c.fillRect(-7 + walk * 3, -10, 6, 10); c.fillRect(2 - walk * 3, -10, 6, 10);
+    c.fillStyle = '#eee'; c.fillRect(-7 + walk * 3, -2, 7, 2); c.fillRect(2 - walk * 3, -2, 7, 2);
+    // body
+    c.fillStyle = body; c.beginPath(); c.ellipse(0, -22, 11, 15, climbing ? 0.2 : 0, 0, 7); c.fill();
+    c.fillStyle = belly; c.beginPath(); c.ellipse(4, -21, 5, 11, 0, 0, 7); c.fill();
+    // back spikes
+    c.fillStyle = '#e8e060'; for (let k = 0; k < 4; k++) { c.beginPath(); c.moveTo(-10 + k * 1, -30 + k * 6); c.lineTo(-16 + k, -27 + k * 6); c.lineTo(-10 + k, -24 + k * 6); c.fill(); }
+    // head
+    const jaw = m.punchT > 0 || m.eatT > 0 ? 4 : 0;
+    c.fillStyle = body; c.beginPath(); c.ellipse(5, -40, 9, 7, 0, 0, 7); c.fill(); c.fillRect(6, -42, 11, 6);
+    c.fillStyle = dark; c.fillRect(6, -36 + jaw, 11, 3);
+    c.fillStyle = '#fff'; c.fillRect(8, -37, 1, 2); c.fillRect(12, -37, 1, 2); c.fillRect(15, -37, 1, 2);
+    c.fillStyle = '#ffe04a'; c.fillRect(6, -45, 4, 3); c.fillStyle = '#000'; c.fillRect(8, -44, 2, 2);
+    // arms
+    c.strokeStyle = body; c.lineWidth = 5; c.lineCap = 'round';
+    if (m.punchT > 0) { const up = m.punchDir === 'up'; c.beginPath(); c.moveTo(4, -28); c.lineTo(up ? 8 : 18, up ? -50 : -28); c.stroke(); c.fillStyle = body; c.beginPath(); c.arc(up ? 8 : 20, up ? -52 : -28, 4, 0, 7); c.fill(); }
+    else if (climbing) { const k = Math.sin(m.y * 0.3) * 4; c.beginPath(); c.moveTo(4, -30); c.lineTo(12, -38 + k); c.stroke(); c.beginPath(); c.moveTo(2, -20); c.lineTo(12, -22 - k); c.stroke(); }
+    else { c.beginPath(); c.moveTo(4, -28); c.lineTo(10, -18 + walk * 2); c.stroke(); }
+    c.restore();
+  }
+
+  function drawBuilding(c, b, t) {
+    if (b.gone) return;
+    const top = b.top();
+    c.save();
+    if (b.down) { c.beginPath(); c.rect(b.x - 4, 0, b.w + 8, GROUND); c.clip(); }
+    const shake = b.down ? Math.sin(t * 60) * 1.5 : 0;
+    c.fillStyle = b.col; c.fillRect(b.x + shake, top, b.w, b.h);
+    c.fillStyle = 'rgba(0,0,0,.25)'; c.fillRect(b.x + b.w - 3 + shake, top, 3, b.h);
+    c.fillStyle = 'rgba(255,255,255,.15)'; c.fillRect(b.x + shake, top, b.w, 2);
+    for (let r = 0; r < b.rows; r++) for (let q = 0; q < b.cols; q++) {
+      const cell = b.cells[r][q], x = b.x + q * CELL + shake, y = top + r * CELL;
+      if (cell.dmg >= 3) { c.fillStyle = '#111'; c.beginPath(); c.moveTo(x + 1, y + 2); c.lineTo(x + 8, y); c.lineTo(x + 15, y + 3); c.lineTo(x + 14, y + 14); c.lineTo(x + 6, y + 16); c.lineTo(x + 1, y + 12); c.fill(); continue; }
+      // window
+      c.fillStyle = cell.who === 'person' || cell.who === 'soldier' ? '#ffe9a0' : (r + q) % 3 ? '#2a3a5a' : '#ffe07a';
+      c.fillRect(x + 4, y + 3, 8, 9);
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(x + 4, y + 11, 8, 1);
+      if (cell.who === 'person') { c.fillStyle = '#ffb98a'; c.fillRect(x + 6, y + 5, 4, 3); c.fillStyle = '#e03a8a'; c.fillRect(x + 5, y + 8, 6, 4); if (Math.floor(t * 4) % 2) c.fillRect(x + 11, y + 4, 1, 3); }
+      if (cell.who === 'soldier') { c.fillStyle = '#3a5a2a'; c.fillRect(x + 5, y + 4, 6, 3); c.fillStyle = '#ffb98a'; c.fillRect(x + 6, y + 6, 4, 2); c.fillStyle = '#3a5a2a'; c.fillRect(x + 5, y + 8, 6, 4); c.fillStyle = '#222'; c.fillRect(cell.side < 0 ? x + 1 : x + 10, y + 8, 5, 1); }
+      if (cell.who === 'food') { c.fillStyle = '#c8742a'; c.beginPath(); c.arc(x + 8, y + 9, 3, 0, 7); c.fill(); c.fillStyle = '#fff'; c.fillRect(x + 10, y + 6, 3, 2); }
+      if (cell.dmg >= 1) { c.strokeStyle = '#222'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 2, y + 2); c.lineTo(x + 6, y + 7); c.lineTo(x + 4, y + 13); if (cell.dmg >= 2) { c.moveTo(x + 14, y + 1); c.lineTo(x + 10, y + 8); c.lineTo(x + 13, y + 14); } c.stroke(); }
+    }
+    c.restore();
+  }
+
+  // ---------- update ----------
+  A = Arcade.start({
+    id: 'stomper', title: 'CITY STOMPER', subtitle: 'A TRIBUTE TO RAMPAGE (1986)', color: '#3fa04a',
+    width: W, height: H, bg: '#000',
+    help: ['ARROWS WALK AND CLIMB', 'SPACE PUNCH (HOLD UP TO PUNCH UP)', 'X JUMP', 'KNOCK EVERY BUILDING DOWN', 'EAT PEOPLE FOR HEALTH'],
+    keys: { b: ['KeyX', 'KeyK'] },
+    touch: { dpad: '4', buttons: [{ act: 'b', label: 'JUMP' }, { act: 'fire', label: 'PUNCH' }] },
+    init() { G = { day: 1, t: 0, m: { x: 40, y: GROUND, face: 1, state: 'ground', walkT: 0, health: 100, punchT: 0, hurtT: 0, eatT: 0 } }; newCity(); },
+    attract(a, dt) { G.t += dt; G.m.walkT += dt; G.m.x = 160 + Math.sin(G.t * 0.4) * 120; G.m.face = Math.cos(G.t * 0.4) > 0 ? 1 : -1; },
+    drawAttract(a) { drawScene(a); },
+    newGame(a) {
+      G = { day: 1, t: 0, lives: 3, m: { x: 10, y: GROUND, face: 1, state: 'ground', walkT: 0, health: 100, punchT: 0, hurtT: 0, eatT: 0 } };
+      newCity();
+      AU.music('music', { v: 0.45 });
+      AU.play('growl', { v: 0.6 });
+    },
+    update(a, dt) {
+      G.t += dt;
+      const m = G.m;
+      if (G.banner > 0) G.banner -= dt;
+      m.punchT = Math.max(0, m.punchT - dt); m.hurtT = Math.max(0, m.hurtT - dt); m.eatT = Math.max(0, m.eatT - dt);
+      for (let k = G.parts.length - 1; k >= 0; k--) { const p = G.parts[k]; p.t -= dt; p.x += (p.vx || 0) * dt; p.y += (p.vy || 0) * dt; if (p.vy != null) p.vy += 200 * dt; if (p.t <= 0) G.parts.splice(k, 1); }
+
+      if (m.state === 'dead') {
+        m.deadT += dt;
+        if (m.deadT > 1.2) m.x += m.face * 60 * dt;
+        if (m.deadT > 3.2) {
+          G.lives--;
+          if (G.lives <= 0) { a.gameOver(); return; }
+          m.state = 'fall'; m.x = 20; m.y = 20; m.vy = 0; m.health = 100; m.hurtT = 1.5;
+        }
+        return;
+      }
+      // slow hunger
+      m.health = Math.max(0, m.health - dt * 0.5);
+      if (m.health <= 0) { m.state = 'dead'; m.deadT = 0; return; }
+
+      const L = a.down('left'), R = a.down('right'), U = a.down('up'), D = a.down('down');
+      if (m.state === 'ground' || m.state === 'roof') {
+        const sp = 64;
+        m.vx = (R ? 1 : 0) - (L ? 1 : 0);
+        if (m.vx) { m.face = m.vx; m.walkT += dt; }
+        m.x += m.vx * sp * dt;
+        m.x = Math.max(8, Math.min(W - 8, m.x));
+        if (m.state === 'roof') {
+          const b = m.b;
+          if (b.down || m.x < b.x - 2 || m.x > b.x + b.w + 2) { m.state = 'fall'; m.vy = 0; m.b = null; }
+          else m.y = b.top();
+        }
+        if (m.state === 'ground') {
+          // grab a wall and climb
+          if (U) for (const b of G.blds) {
+            if (b.down) continue;
+            if (Math.abs(m.x - (b.x - 6)) < 8) { m.state = 'climb'; m.b = b; m.side = -1; m.x = b.x - 7; m.face = 1; break; }
+            if (Math.abs(m.x - (b.x + b.w + 6)) < 8) { m.state = 'climb'; m.b = b; m.side = 1; m.x = b.x + b.w + 7; m.face = -1; break; }
+          }
+        }
+        if (a.pressed('b') && (m.state === 'ground' || m.state === 'roof')) { m.state = 'fall'; m.vy = -190; m.b = null; AU.play('jump', { v: 0.5, rate: 0.7 }); }
+      } else if (m.state === 'climb') {
+        const b = m.b;
+        if (b.down) { m.state = 'fall'; m.vy = 0; m.b = null; hurt(a, 6); }
+        else {
+          if (U) m.y -= 50 * dt; if (D) m.y += 50 * dt;
+          if (U || D) m.walkT += dt;
+          if (m.y > GROUND) { m.y = GROUND; m.state = 'ground'; m.b = null; }
+          else if (m.y - 20 < b.top()) {
+            if (U) { m.state = 'roof'; m.y = b.top(); m.x = m.side < 0 ? b.x + 6 : b.x + b.w - 6; }
+            else m.y = b.top() + 20;
+          }
+          if ((m.side < 0 && L) || (m.side > 0 && R)) { m.state = 'fall'; m.vy = 0; m.b = null; m.x += m.side * 6; }
+        }
+      } else if (m.state === 'fall') {
+        m.vy += 420 * dt;
+        const y0 = m.y;
+        m.y += m.vy * dt;
+        m.vx = (R ? 1 : 0) - (L ? 1 : 0); if (m.vx) m.face = m.vx;
+        m.x = Math.max(8, Math.min(W - 8, m.x + m.vx * 60 * dt));
+        if (m.vy > 0) {
+          for (const b of G.blds) {
+            if (b.down) continue;
+            const top = b.top();
+            if (m.x > b.x && m.x < b.x + b.w && y0 <= top && m.y >= top) { m.y = top; m.state = 'roof'; m.b = b; AU.play('land', { v: 0.8, rate: 0.6 }); break; }
+          }
+          if (m.state === 'fall' && m.y >= GROUND) { m.y = GROUND; m.state = 'ground'; AU.play('land', { v: 0.8, rate: 0.6 }); }
+        }
+      }
+
+      // punching
+      if (a.pressed('fire') && m.punchT <= 0) {
+        m.punchT = 0.25; m.punchDir = U ? 'up' : 'side';
+        let hitSomething = false;
+        const hx = m.x + m.face * 18, hy = m.y - (D ? 12 : 26);
+        const ux = m.x + m.face * 6, uy = m.y - 50;
+        const px = m.punchDir === 'up' ? ux : hx, py = m.punchDir === 'up' ? uy : hy;
+        // enemies first
+        for (const f of G.foes) {
+          if (f.dead) continue;
+          if (Math.abs(f.x - px) < (f.kind === 'heli' ? 16 : 10) && Math.abs(f.y - py) < 14) { f.dead = true; hitSomething = true; a.addScore(f.kind === 'heli' ? 1000 : f.kind === 'tank' ? 800 : 300); boom(f.x, f.y); AU.play('boom', { v: 0.6 }); }
+        }
+        // then the building
+        const b = m.state === 'climb' ? m.b : bldAtX(px);
+        if (b && !hitSomething) {
+          let hit = cellAt(b, m.state === 'climb' ? (m.side < 0 ? b.x + 2 : b.x + b.w - 2) : px, py);
+          // a smashed-out cell lets the next punch reach one column deeper
+          if (hit && hit.cell.dmg >= 3 && !hit.cell.who && m.state === 'climb') { const c2 = hit.c - m.side; if (c2 >= 0 && c2 < b.cols) hit = { c: c2, r: hit.r, cell: b.cells[hit.r][c2] }; }
+          if (hit) {
+            const cell = hit.cell;
+            if (cell.who === 'person' || cell.who === 'food') { m.health = Math.min(100, m.health + (cell.who === 'person' ? 12 : 8)); a.addScore(cell.who === 'person' ? 500 : 250); cell.who = null; m.eatT = 0.5; AU.play('coin', { v: 0.7 }); popup(px, py, 'YUM'); }
+            else if (cell.who === 'soldier') { cell.who = null; a.addScore(300); AU.play('scream', { v: 0.4, rate: 1.5 }); }
+            else if (cell.dmg < 3) { cell.dmg++; a.addScore(50); AU.play(cell.dmg === 3 ? 'smash' : 'punch', { v: 0.6 }); debris(px, py, b.col); }
+            hitSomething = true;
+            checkCollapse(a, b);
+          }
+        }
+        if (!hitSomething) AU.play('punch', { v: 0.3, rate: 1.3 });
+      }
+
+      // windows fill with people, food and soldiers
+      G.spawnT -= dt;
+      if (G.spawnT <= 0) {
+        G.spawnT = Math.max(0.6, 2 - G.day * 0.15);
+        const b = G.blds.filter(x => !x.down)[Math.floor(Math.random() * G.blds.length)];
+        if (b) {
+          const r = Math.floor(Math.random() * b.rows), q = Math.floor(Math.random() * b.cols), cell = b.cells[r][q];
+          if (!cell.who && cell.dmg < 3) {
+            const roll = Math.random();
+            cell.who = roll < 0.35 ? 'person' : roll < 0.5 ? 'food' : 'soldier';
+            cell.whoT = 4 + Math.random() * 3; cell.fireT = 0.8 + Math.random(); cell.side = Math.random() < 0.5 ? -1 : 1;
+          }
+        }
+      }
+      for (const b of G.blds) for (let r = 0; r < b.rows; r++) for (let q = 0; q < b.cols; q++) {
+        const cell = b.cells[r][q];
+        if (!cell.who) continue;
+        cell.whoT -= dt; if (cell.whoT <= 0 || b.down) { cell.who = null; continue; }
+        if (cell.who === 'soldier') {
+          cell.side = m.x < b.x + q * CELL ? -1 : 1;
+          cell.fireT -= dt;
+          if (cell.fireT <= 0) { cell.fireT = 1.4 + Math.random(); const y = b.top() + r * CELL + 8; G.shots.push({ x: b.x + q * CELL + 8, y, vx: cell.side * 110, vy: 0 }); AU.play('shot', { v: 0.25 }); }
+        }
+      }
+      // street soldiers, helicopters, tanks
+      G.heliT -= dt; G.tankT -= dt;
+      if (G.heliT <= 0) { G.heliT = Math.max(5, 14 - G.day); const l = Math.random() < 0.5; G.foes.push({ kind: 'heli', x: l ? -20 : W + 20, y: 40 + Math.random() * 60, vx: l ? 40 : -40, fireT: 1.5 }); }
+      if (G.tankT <= 0 && G.day > 1) { G.tankT = Math.max(7, 18 - G.day); const l = Math.random() < 0.5; G.foes.push({ kind: 'tank', x: l ? -20 : W + 20, y: GROUND - 4, vx: l ? 22 : -22, fireT: 2 }); }
+      if (Math.random() < dt * (0.15 + G.day * 0.05)) { const l = Math.random() < 0.5; G.foes.push({ kind: 'trooper', x: l ? -6 : W + 6, y: GROUND - 6, vx: l ? 26 : -26, fireT: 1 + Math.random() }); }
+      for (let k = G.foes.length - 1; k >= 0; k--) {
+        const f = G.foes[k];
+        if (f.dead) { G.foes.splice(k, 1); continue; }
+        f.x += f.vx * dt;
+        if (f.kind === 'heli') { f.y += Math.sin(G.t * 2 + k) * 10 * dt; if (Math.abs(f.x - m.x) < 80) f.vx *= 0.99; }
+        f.fireT -= dt;
+        if (f.fireT <= 0) {
+          f.fireT = f.kind === 'heli' ? 1.6 : f.kind === 'tank' ? 2.4 : 2;
+          const dx = m.x - f.x, dy = (m.y - 24) - f.y, d = Math.hypot(dx, dy) || 1;
+          const sp = f.kind === 'tank' ? 110 : 130;
+          if (d < 260) { G.shots.push({ x: f.x, y: f.y, vx: dx / d * sp, vy: dy / d * sp, big: f.kind === 'tank' }); AU.play('shot', { v: 0.2, rate: f.kind === 'tank' ? 0.6 : 1 }); }
+        }
+        // stomp troopers underfoot
+        if (f.kind === 'trooper' && m.state === 'ground' && Math.abs(f.x - m.x) < 8) { f.dead = true; a.addScore(200); popup(f.x, f.y - 8, 'SQUISH'); AU.play('punch', { v: 0.5, rate: 0.7 }); }
+        if (f.x < -40 || f.x > W + 40) G.foes.splice(k, 1);
+      }
+      for (let k = G.shots.length - 1; k >= 0; k--) {
+        const s = G.shots[k];
+        s.x += s.vx * dt; s.y += s.vy * dt;
+        if (Math.abs(s.x - m.x) < 10 && s.y < m.y && s.y > m.y - 44) { hurt(a, s.big ? 8 : 4); G.shots.splice(k, 1); continue; }
+        if (s.x < -10 || s.x > W + 10 || s.y < -10 || s.y > GROUND) G.shots.splice(k, 1);
+      }
+      // collapsing buildings
+      for (const b of G.blds) {
+        if (!b.down || b.gone) continue;
+        b.sink += 26 * dt;
+        if (Math.random() < 0.5) G.parts.push({ x: b.x + Math.random() * b.w, y: GROUND - 4, t: 0.8, dust: true, vx: (Math.random() - 0.5) * 30, vy: -20 });
+        if (b.sink >= b.h) b.gone = true;
+      }
+      if (!G.clear && G.blds.every(b => b.gone)) { G.clear = 3.5; a.addScore(5000 * G.day); AU.play('fanfare', { v: 0.8 }); AU.play('growl', { v: 0.7 }); }
+      if (G.clear > 0) { G.clear -= dt; if (G.clear <= 0) { G.day++; newCity(); } }
+    },
+    draw(a) { drawScene(a); drawHud(a); },
+  });
+
+  function checkCollapse(a, b) {
+    if (b.down) return;
+    const total = damageTotal(b), max = b.rows * b.cols * 3;
+    if (total >= Math.min(max * 0.42, b.rows * 3 * 1.3)) {
+      b.down = true; a.addScore(1000 * b.rows);
+      AU.play('crash', { v: 0.9 }); AU.play('boom', { v: 0.6, delay: 0.3 });
+      popup(b.x + b.w / 2, b.top() - 10, String(1000 * b.rows));
+    }
+  }
+  function debris(x, y, col) { for (let k = 0; k < 5; k++) G.parts.push({ x, y, t: 0.7, vx: (Math.random() - 0.5) * 80, vy: -60 - Math.random() * 60, col }); }
+  function boom(x, y) { for (let k = 0; k < 8; k++) G.parts.push({ x, y, t: 0.5, vx: (Math.random() - 0.5) * 120, vy: -Math.random() * 100, col: k % 2 ? '#ff8a1a' : '#ffe04a' }); }
+  function popup(x, y, s) { G.parts.push({ x, y, t: 1, text: s, vy: null, vx: 0 }); }
+
+  // ---------- draw ----------
+  function drawScene(a) {
+    const c = a.ctx;
+    const dusk = Math.min(1, (G.day - 1) * 0.2);
+    const g = c.createLinearGradient(0, 0, 0, GROUND);
+    g.addColorStop(0, dusk > 0.6 ? '#0a0a2a' : '#3a7ad8'); g.addColorStop(1, dusk > 0.3 ? '#ff9a5a' : '#bfe0ff');
+    c.fillStyle = g; c.fillRect(0, 0, W, GROUND);
+    // skyline far away
+    c.fillStyle = dusk > 0.6 ? '#1a1a3a' : '#8aa0c0';
+    for (let x = 0, i = 0; x < W; i++) { const w = 14 + ((i * 37) % 20), h = 30 + ((i * 53) % 50); c.fillRect(x, GROUND - h - 20, w, h + 20); x += w + 2; }
+    for (const b of G.blds) drawBuilding(c, b, G.t);
+    // street
+    c.fillStyle = '#555'; c.fillRect(0, GROUND, W, H - GROUND);
+    c.fillStyle = '#777'; c.fillRect(0, GROUND, W, 3);
+    c.fillStyle = '#ddd'; for (let x = 0; x < W; x += 24) c.fillRect(x, GROUND + 11, 12, 2);
+    // enemies
+    for (const f of G.foes) {
+      if (f.kind === 'heli') {
+        c.fillStyle = '#3a5a2a'; c.beginPath(); c.ellipse(f.x, f.y, 11, 6, 0, 0, 7); c.fill(); c.fillRect(f.x - (f.vx > 0 ? 20 : -8), f.y - 2, 12, 3);
+        c.fillStyle = '#9cf'; c.fillRect(f.x + (f.vx > 0 ? 3 : -8), f.y - 3, 5, 4);
+        c.fillStyle = '#222'; const r = Math.sin(G.t * 40) * 14; c.fillRect(f.x - Math.abs(r), f.y - 8, Math.abs(r) * 2, 1);
+      } else if (f.kind === 'tank') {
+        c.fillStyle = '#4a5a3a'; c.fillRect(f.x - 12, f.y - 6, 24, 8); c.fillRect(f.x - 6, f.y - 11, 12, 6);
+        c.strokeStyle = '#4a5a3a'; c.lineWidth = 2; c.beginPath(); c.moveTo(f.x, f.y - 9); c.lineTo(f.x + (G.m.x > f.x ? 10 : -10), f.y - 16); c.stroke();
+        c.fillStyle = '#222'; c.fillRect(f.x - 12, f.y + 1, 24, 3);
+      } else {
+        c.fillStyle = '#3a5a2a'; c.fillRect(f.x - 2, f.y - 8, 4, 6); c.fillStyle = '#ffb98a'; c.fillRect(f.x - 2, f.y - 11, 4, 3); c.fillStyle = '#222'; c.fillRect(f.x - 2, f.y - 2, 1, 2); c.fillRect(f.x + 1, f.y - 2, 1, 2);
+      }
+    }
+    for (const s of G.shots) { c.fillStyle = s.big ? '#ff8a1a' : '#ffe04a'; c.fillRect(s.x - (s.big ? 2 : 1), s.y - 1, s.big ? 4 : 3, s.big ? 3 : 2); }
+    drawMonster(c, G.m, G.t);
+    for (const p of G.parts) {
+      if (p.text) { a.text(p.text, p.x, p.y, 6, '#fff', 'center'); continue; }
+      if (p.dust) { c.fillStyle = `rgba(180,170,150,${p.t})`; c.beginPath(); c.arc(p.x, p.y, 6 * (1.2 - p.t), 0, 7); c.fill(); continue; }
+      c.fillStyle = p.col || '#888'; c.fillRect(p.x, p.y, 3, 3);
+    }
+  }
+  function drawHud(a) {
+    const c = a.ctx, m = G.m;
+    c.fillStyle = 'rgba(0,0,0,.45)'; c.fillRect(0, 0, W, 22);
+    a.text('RORK', 4, 3, 8, '#3fa04a'); a.text(String(a.score), 4, 13, 8, '#fff');
+    c.fillStyle = '#300'; c.fillRect(60, 6, 100, 8); c.fillStyle = m.health > 30 ? '#3f6' : '#f33'; c.fillRect(60, 6, m.health, 8);
+    c.strokeStyle = '#fff'; c.strokeRect(59.5, 5.5, 101, 9);
+    for (let k = 0; k < (G.lives || 1) - 1; k++) { c.fillStyle = '#3fa04a'; c.fillRect(168 + k * 10, 6, 7, 8); }
+    a.text('DAY ' + G.day, W - 4, 3, 8, '#ffd21e', 'right');
+    a.text(CITIES[(G.day - 1) % CITIES.length], W - 4, 13, 6, '#ccc', 'right');
+    if (G.banner > 0) { a.text('DAY ' + G.day, W / 2, 70, 16, '#fff', 'center'); a.text(CITIES[(G.day - 1) % CITIES.length], W / 2, 94, 10, '#ffd21e', 'center'); }
+    if (G.clear > 0) { a.text('CITY FLATTENED', W / 2, 80, 12, '#ffd21e', 'center'); a.text('BONUS ' + (5000 * G.day), W / 2, 100, 8, '#fff', 'center'); }
+    if (m.state === 'dead' && m.deadT > 1.2) a.text(G.lives > 1 ? 'OOPS' : 'BACK TO HUMAN FORM', W / 2, 90, 8, '#fff', 'center');
+  }
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sky Fury</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+<style>
+  .arc-btns { gap: 10px; }
+  .arc-btns .arc-round { width: 62px; height: 62px; }
+</style>
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script>
+(function () {
+  const W = 320, H = 224, F = 180;     // F: focal length in pixels
+  const AU = Arcade.Audio;
+  AU.load({
+    music: '../../assets/audio/jet-stage.m4a',
+    gun: '../../assets/sfx/gun.wav', missile: '../../assets/sfx/missile.wav', boom: '../../assets/sfx/boom.wav', crash: '../../assets/sfx/crash.wav',
+    alarm: '../../assets/sfx/alarm.wav', bump: '../../assets/sfx/bump.wav', whoosh: '../../assets/sfx/whoosh.wav', fanfare: '../../assets/sfx/fanfare.wav', cue: '../../assets/sfx/cue.wav',
+  });
+  const STAGES = [
+    { name: 'OCEAN RUN', sky: ['#2a78e0', '#bfe6ff'], ground: ['#1d5fa8', '#2a70bc'], props: 'wave', fog: '#bfe6ff' },
+    { name: 'DESERT STORM', sky: ['#3a8ee8', '#ffe2b0'], ground: ['#d8a860', '#cc9a52'], props: 'rock', fog: '#ffe2b0' },
+    { name: 'GREEN VALLEY', sky: ['#4a9cf0', '#d8f0ff'], ground: ['#3e8a3a', '#357e32'], props: 'tree', fog: '#d8f0ff' },
+    { name: 'RED CANYON', sky: ['#e8783a', '#ffd08a'], ground: ['#a8502a', '#9a4624'], props: 'mesa', fog: '#ffc080' },
+    { name: 'NIGHT STRIKE', sky: ['#050818', '#1a2a5a'], ground: ['#101830', '#0c1428'], props: 'light', fog: '#1a2a5a' },
+  ];
+  const P = (w, h, fn) => { const c = document.createElement('canvas'); c.width = w; c.height = h; fn(c.getContext('2d'), w, h); return c; };
+
+  // ---------- sprites ----------
+  function jet(body, dark, accent, rear) {
+    return P(64, 30, c => {
+      c.fillStyle = dark; c.beginPath(); c.moveTo(32, 8); c.lineTo(2, 20); c.lineTo(4, 23); c.lineTo(32, 17); c.lineTo(60, 23); c.lineTo(62, 20); c.fill();   // wings
+      c.fillStyle = body; c.beginPath(); c.moveTo(32, 9); c.lineTo(6, 20); c.lineTo(32, 15); c.lineTo(58, 20); c.fill();
+      c.fillStyle = body; c.fillRect(26, 4, 12, 20);                                                                 // fuselage
+      c.fillStyle = dark; c.beginPath(); c.moveTo(24, 6); c.lineTo(20, 0); c.lineTo(23, 0); c.lineTo(28, 8); c.fill(); c.beginPath(); c.moveTo(40, 6); c.lineTo(44, 0); c.lineTo(41, 0); c.lineTo(36, 8); c.fill(); // twin tails
+      c.fillStyle = accent; c.fillRect(8, 19, 6, 2); c.fillRect(50, 19, 6, 2);
+      if (rear) { c.fillStyle = '#333'; c.beginPath(); c.arc(29, 22, 3, 0, 7); c.arc(35, 22, 3, 0, 7); c.fill(); }
+      else { c.fillStyle = '#7fd8ff'; c.fillRect(29, 8, 6, 5); c.fillStyle = '#111'; c.fillRect(30, 22, 4, 4); }
+    });
+  }
+  const PLAYER = jet('#c8ccd8', '#7a8098', '#e02828', true);
+  const ENEMY = jet('#4a4e5a', '#2a2e38', '#ff8a1a', false);
+  const ENEMY_REAR = jet('#4a4e5a', '#2a2e38', '#ff8a1a', true);
+  const BOMBER = P(90, 30, c => {
+    c.fillStyle = '#3a3e30'; c.beginPath(); c.moveTo(45, 6); c.lineTo(0, 18); c.lineTo(0, 22); c.lineTo(45, 16); c.lineTo(90, 22); c.lineTo(90, 18); c.fill();
+    c.fillStyle = '#4e5440'; c.fillRect(37, 2, 16, 24); c.fillStyle = '#222'; for (const x of [16, 28, 62, 74]) c.fillRect(x - 3, 16, 6, 6);
+    c.fillStyle = '#ff8a1a'; c.fillRect(42, 6, 6, 4);
+  });
+  const CLOUD = P(96, 36, c => { c.fillStyle = 'rgba(255,255,255,.85)'; for (const [x, y, r] of [[20, 22, 14], [40, 16, 18], [62, 20, 15], [78, 24, 12], [48, 26, 14]]) { c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); } });
+  const PROPS = {
+    wave: P(24, 6, c => { c.fillStyle = 'rgba(255,255,255,.8)'; c.fillRect(0, 2, 24, 2); c.fillRect(6, 0, 10, 2); }),
+    rock: P(30, 20, c => { c.fillStyle = '#8a6a44'; c.beginPath(); c.moveTo(0, 20); c.lineTo(8, 4); c.lineTo(20, 0); c.lineTo(30, 20); c.fill(); c.fillStyle = '#a8845a'; c.beginPath(); c.moveTo(8, 4); c.lineTo(20, 0); c.lineTo(14, 20); c.lineTo(0, 20); c.fill(); }),
+    tree: P(20, 30, c => { c.fillStyle = '#4a2e14'; c.fillRect(8, 20, 4, 10); c.fillStyle = '#1e6a2a'; c.beginPath(); c.moveTo(10, 0); c.lineTo(0, 22); c.lineTo(20, 22); c.fill(); }),
+    mesa: P(60, 30, c => { c.fillStyle = '#7a3016'; c.beginPath(); c.moveTo(0, 30); c.lineTo(10, 4); c.lineTo(50, 4); c.lineTo(60, 30); c.fill(); c.fillStyle = '#c0602e'; c.fillRect(10, 4, 40, 4); }),
+    light: P(10, 10, c => { c.fillStyle = '#ffe07a'; c.fillRect(3, 3, 4, 4); c.fillStyle = 'rgba(255,224,122,.3)'; c.beginPath(); c.arc(5, 5, 5, 0, 7); c.fill(); }),
+  };
+
+  // ---------- state ----------
+  let G, A;
+  const GROUND = -380;       // ground height relative to cruise altitude 0
+  const SPEED = 900;         // forward speed, world units per second
+
+  function newStage() {
+    const st = STAGES[G.stage % STAGES.length];
+    G.st = st; G.stT = 0; G.stLen = 55 + Math.min(20, G.stage * 4);
+    G.enemies = []; G.shots = []; G.eShots = []; G.missiles = []; G.booms = [];
+    G.spawnT = 2; G.props = []; G.clouds = [];
+    for (let i = 0; i < 40; i++) G.props.push({ x: (Math.random() * 2 - 1) * 4000, z: Math.random() * 6000 + 100 });
+    for (let i = 0; i < 8; i++) G.clouds.push({ x: (Math.random() * 2 - 1) * 3000, y: 200 + Math.random() * 600, z: Math.random() * 6000 + 200 });
+    G.banner = 2.5; G.missilesLeft = 60;
+  }
+
+  function project(x, y, z) {
+    const dz = z; if (dz < 10) return null;
+    return { x: W / 2 + (x - G.cx) * F / dz, y: G.hy - (y - G.cy) * F / dz, s: F / dz };
+  }
+
+  function spawnWave() {
+    const n = Math.min(6, 2 + Math.floor(G.stage / 2) + Math.floor(Math.random() * 3));
+    const kind = Math.random();
+    if (kind < 0.25 && G.stT > 8) {
+      // a pack overtakes from behind and pulls ahead
+      for (let i = 0; i < n; i++) G.enemies.push({ x: G.cx + (i - n / 2) * 120, y: G.cy - 60 + Math.random() * 120, z: 20 + i * 15, vx: 0, vy: 0, vz: 520, hp: 1, rear: true, fireT: 1.5 + Math.random() * 2, turn: 1.2 + Math.random() });
+    } else if (kind < 0.35 && G.stage > 0) {
+      G.enemies.push({ x: G.cx + (Math.random() - 0.5) * 600, y: G.cy + 200, z: 3200, vx: 0, vy: 0, vz: -300, hp: 5, bomber: true, fireT: 1 });
+    } else {
+      const cx = G.cx + (Math.random() - 0.5) * 1400, cy = G.cy + (Math.random() - 0.5) * 500;
+      const form = Math.random() < 0.5 ? 'v' : 'line';
+      for (let i = 0; i < n; i++) {
+        const o = form === 'v' ? [(i - n / 2) * 110, -Math.abs(i - n / 2) * 60] : [(i - n / 2) * 140, 0];
+        G.enemies.push({ x: cx + o[0], y: cy + o[1], z: 3400 + i * 60, vx: (Math.random() - 0.5) * 120, vy: (Math.random() - 0.5) * 60, vz: -700 - G.stage * 40, hp: 1, fireT: 0.8 + Math.random() * 2.5 });
+      }
+    }
+  }
+
+  function hurt(a) {
+    if (G.inv > 0 || G.dead > 0) return;
+    G.lives--; G.dead = 2.2; G.inv = 0;
+    AU.play('crash', { v: 0.9 }); AU.play('boom', { v: 0.8 });
+    G.booms.push({ sx: W / 2, sy: H - 50, t: 0, big: true, screen: true });
+  }
+
+  A = Arcade.start({
+    id: 'skyfury', title: 'SKY FURY', subtitle: 'A TRIBUTE TO AFTER BURNER (1987)', color: '#7cf',
+    width: W, height: H, bg: '#000',
+    help: ['ARROWS FLY', 'SPACE OR Z CANNON', 'X FIRES MISSILES AT LOCKED TARGETS', 'C BARREL ROLL DODGES MISSILES', 'SURVIVE EACH STAGE'],
+    keys: { fire: ['Space', 'KeyZ', 'KeyJ'], b: ['KeyX', 'KeyK'], c: ['KeyC', 'KeyL', 'ShiftLeft'] },
+    touch: { dpad: '4', buttons: [{ act: 'c', label: 'ROLL' }, { act: 'b', label: 'MSL' }, { act: 'fire', label: 'GUN' }] },
+    init() { G = { stage: 0, cx: 0, cy: 0, vx: 0, vy: 0, hy: H / 2, bank: 0, t: 0, lives: 3, scroll: 0, lock: [], kills: 0 }; newStage(); },
+    attract(a, dt) { G.t += dt; G.scroll += SPEED * dt; G.bank = Math.sin(G.t * 0.6) * 0.3; for (const p of G.props) { p.z -= SPEED * dt; if (p.z < 50) { p.z += 6000; p.x = G.cx + (Math.random() * 2 - 1) * 4000; } } },
+    drawAttract(a) { drawWorld(a); c_draw_player(a.ctx); },
+    newGame(a) {
+      G = { stage: 0, cx: 0, cy: 0, vx: 0, vy: 0, hy: H / 2, bank: 0, roll: 0, rollT: 0, t: 0, lives: 3, scroll: 0, inv: 2, dead: 0, kills: 0, gunT: 0, lock: [], alarmT: 0 };
+      newStage();
+      AU.music('music', { v: 0.45 });
+    },
+    update(a, dt) {
+      G.t += dt; G.stT += dt; G.scroll += SPEED * dt;
+      if (G.banner > 0) G.banner -= dt;
+      if (G.inv > 0) G.inv -= dt;
+      // flying
+      if (G.dead > 0) {
+        G.dead -= dt;
+        if (G.dead <= 0) { if (G.lives <= 0) { a.gameOver(); return; } G.inv = 2.5; G.eShots = []; }
+      } else {
+        const ax = (a.down('right') ? 1 : 0) - (a.down('left') ? 1 : 0), ay = (a.down('up') ? 1 : 0) - (a.down('down') ? 1 : 0);
+        G.vx += (ax * 1400 - G.vx) * Math.min(1, dt * 3);
+        G.vy += (ay * 700 - G.vy) * Math.min(1, dt * 3);
+        G.cx += G.vx * dt; G.cy += G.vy * dt;
+        G.cy = Math.max(-240, Math.min(420, G.cy));
+        if (a.pressed('c') && G.rollT <= 0) { G.rollT = 0.8; G.rollDir = ax >= 0 ? 1 : -1; AU.play('whoosh', { v: 0.6 }); }
+      }
+      if (G.rollT > 0) { G.rollT -= dt; G.roll = G.rollDir * (1 - Math.max(0, G.rollT) / 0.8) * Math.PI * 2; if (G.rollT <= 0) G.roll = 0; }
+      G.bank += ((-G.vx / 1400) * 0.55 - G.bank) * Math.min(1, dt * 4);
+      G.hy = H / 2 + 10 + G.vy / 700 * 18 + G.cy * 0.02;
+
+      // scenery
+      for (const p of G.props) { p.z -= SPEED * dt; if (p.z < 60) { p.z += 6000; p.x = G.cx + (Math.random() * 2 - 1) * 4000; } }
+      for (const c of G.clouds) { c.z -= SPEED * 1.1 * dt; if (c.z < 60) { c.z += 6000; c.x = G.cx + (Math.random() * 2 - 1) * 3000; c.y = G.cy + 200 + Math.random() * 500; } }
+
+      // guns
+      G.gunT -= dt;
+      if (a.down('fire') && G.gunT <= 0 && G.dead <= 0) {
+        G.gunT = 0.07;
+        G.shots.push({ x: G.cx + (G.shots.length % 2 ? 14 : -14), y: G.cy - 30, z: 60, t: 0 });
+        if (!G.gunSnd || G.t - G.gunSnd > 0.25) { AU.play('gun', { v: 0.25 }); G.gunSnd = G.t; }
+      }
+      for (let k = G.shots.length - 1; k >= 0; k--) {
+        const s = G.shots[k]; s.z += 5200 * dt; s.t += dt;
+        // aim converges on the reticle point ahead
+        s.x += (G.cx - s.x) * dt * 2; s.y += (G.cy + 30 - s.y) * dt * 2;
+        let hit = false;
+        for (const e of G.enemies) {
+          if (e.dead) continue;
+          if (Math.abs(e.z - s.z) < 260 && Math.abs(e.x - s.x) < (e.bomber ? 110 : 70) && Math.abs(e.y - s.y) < 60) { hit = true; damage(a, e, 1); break; }
+        }
+        if (hit || s.z > 4000) G.shots.splice(k, 1);
+      }
+
+      // lock-on: targets near the reticle
+      G.lock = G.lock.filter(e => !e.dead && e.z > 150 && e.z < 3200);
+      for (const e of G.enemies) {
+        if (e.dead || G.lock.includes(e) || e.z < 300 || e.z > 3000 || G.lock.length >= 6) continue;
+        const p = project(e.x, e.y, e.z); if (!p) continue;
+        if (Math.hypot(p.x - W / 2, p.y - (G.hy - 6)) < 46) { G.lock.push(e); AU.play('cue', { v: 0.12, rate: 2 }); }
+      }
+      if (a.pressed('b') && G.lock.length && G.missilesLeft > 0 && G.dead <= 0) {
+        for (const e of G.lock) { if (G.missilesLeft <= 0) break; G.missilesLeft--; G.missiles.push({ x: G.cx + (Math.random() - 0.5) * 60, y: G.cy - 40, z: 40, target: e, t: 0 }); }
+        G.lock = []; AU.play('missile', { v: 0.7 });
+      }
+      for (let k = G.missiles.length - 1; k >= 0; k--) {
+        const m = G.missiles[k], e = m.target; m.t += dt;
+        if (e.dead) { m.z += 3000 * dt; if (m.z > 4000) G.missiles.splice(k, 1); continue; }
+        const dx = e.x - m.x, dy = e.y - m.y, dz = e.z - m.z, d = Math.hypot(dx, dy, dz) || 1;
+        const sp = 2600;
+        m.x += dx / d * sp * dt; m.y += dy / d * sp * dt; m.z += dz / d * sp * dt;
+        if (d < 90) { damage(a, e, 5); G.missiles.splice(k, 1); }
+        else if (m.t > 4) G.missiles.splice(k, 1);
+      }
+
+      // enemies
+      G.spawnT -= dt;
+      if (G.stT < G.stLen && G.spawnT <= 0) { G.spawnT = Math.max(1.4, 3.2 - G.stage * 0.25) * (0.7 + Math.random() * 0.6); spawnWave(); }
+      let incoming = false;
+      for (let k = G.enemies.length - 1; k >= 0; k--) {
+        const e = G.enemies[k];
+        if (e.dead) { e.dead += dt; if (e.dead > 0.8) G.enemies.splice(k, 1); continue; }
+        if (e.rear) { e.turn -= dt; if (e.turn < 0 && e.vz > -600) e.vz -= 900 * dt; }
+        // light homing towards the player's lane
+        e.vx += ((G.cx - e.x) * 0.4 - e.vx) * dt * 0.8; e.vy += ((G.cy - e.y) * 0.3 - e.vy) * dt * 0.8;
+        e.x += e.vx * dt; e.y += e.vy * dt; e.z += (e.vz - (e.rear ? 0 : 0)) * dt;
+        e.fireT -= dt;
+        if (e.fireT <= 0 && e.z > 500 && e.z < 2600 && G.dead <= 0) {
+          e.fireT = (e.bomber ? 1.2 : 2.5 + Math.random() * 2) / (1 + G.stage * 0.15);
+          G.eShots.push({ x: e.x, y: e.y, z: e.z - 40, t: 0 });
+        }
+        if (e.z < 30) {
+          if (Math.abs(e.x - G.cx) < 90 && Math.abs(e.y - G.cy) < 70 && G.rollT <= 0) hurt(a);
+          G.enemies.splice(k, 1);
+        }
+        if (e.z > 5000) G.enemies.splice(k, 1);
+      }
+      for (let k = G.eShots.length - 1; k >= 0; k--) {
+        const s = G.eShots[k]; s.t += dt;
+        s.z -= (1500 + G.stage * 80) * dt;
+        const k2 = Math.min(1, dt * 1.6);
+        s.x += (G.cx - s.x) * k2 * 0.8; s.y += (G.cy - s.y) * k2 * 0.8;
+        if (s.z < 1100) incoming = true;
+        if (s.z < 40) {
+          G.eShots.splice(k, 1);
+          if (Math.hypot(s.x - G.cx, s.y - G.cy) < 55 && G.rollT <= 0 && G.inv <= 0) hurt(a);
+          else G.booms.push({ x: s.x, y: s.y, z: 200, t: 0.3 });
+        }
+      }
+      // shooting down an incoming missile
+      for (let k = G.eShots.length - 1; k >= 0; k--) {
+        const s = G.eShots[k];
+        for (const b of G.shots) if (Math.abs(b.z - s.z) < 200 && Math.abs(b.x - s.x) < 45 && Math.abs(b.y - s.y) < 45) { G.eShots.splice(k, 1); a.addScore(100); G.booms.push({ x: s.x, y: s.y, z: s.z, t: 0.2 }); break; }
+      }
+      G.alarmT -= dt;
+      if (incoming && G.alarmT <= 0) { AU.play('alarm', { v: 0.25 }); G.alarmT = 1; }
+      G.incoming = incoming;
+      for (let k = G.booms.length - 1; k >= 0; k--) { const b = G.booms[k]; b.t += dt; if (!b.screen && b.z) b.z -= SPEED * dt * 0.5; if (b.t > 0.9) G.booms.splice(k, 1); }
+
+      // stage end
+      if (G.stT > G.stLen && !G.enemies.length && !G.clear) { G.clear = 3.5; AU.play('fanfare', { v: 0.8 }); a.addScore(G.kills * 200); }
+      if (G.clear > 0) { G.clear -= dt; if (G.clear <= 0) { G.clear = 0; G.stage++; G.kills = 0; newStage(); } }
+    },
+    draw(a) { drawWorld(a); c_draw_player(a.ctx); drawHud(a); },
+  });
+
+  function damage(a, e, n) {
+    e.hp -= n;
+    if (e.hp > 0) { AU.play('bump', { v: 0.3 }); return; }
+    e.dead = 0.001; G.kills++;
+    a.addScore(e.bomber ? 3000 : e.rear ? 1500 : 1000);
+    G.booms.push({ x: e.x, y: e.y, z: e.z, t: 0, big: e.bomber });
+    AU.play('boom', { v: 0.6 });
+  }
+
+  function drawWorld(a) {
+    const c = a.ctx, st = G.st;
+    c.save();
+    c.translate(W / 2, H / 2); c.rotate(G.bank + (G.roll || 0) * 0.35); c.translate(-W / 2, -H / 2);
+    const hy = G.hy;
+    // sky
+    const g = c.createLinearGradient(0, hy - 200, 0, hy);
+    g.addColorStop(0, st.sky[0]); g.addColorStop(1, st.sky[1]);
+    c.fillStyle = g; c.fillRect(-200, hy - 700, W + 400, 703);
+    // ground rows, striped in depth for the speed rush
+    const camH = G.cy - GROUND;
+    for (let y = Math.ceil(hy); y < H + 200; y += 2) {
+      const dz = F * camH / (y - hy + 0.5);
+      const band = Math.floor((dz + G.scroll) / 260) % 2;
+      const fog = Math.min(1, dz / 7000);
+      c.fillStyle = mixc(st.ground[band], st.fog, fog * fog);
+      c.fillRect(-200, y, W + 400, 2);
+    }
+    // ground props
+    const pr = PROPS[st.props];
+    const list = G.props.slice().sort((p, q) => q.z - p.z);
+    for (const p of list) {
+      const q = project(p.x, GROUND, p.z); if (!q) continue;
+      const w = pr.width * q.s * 4, h = pr.height * q.s * 4;
+      if (w < 0.5) continue;
+      c.drawImage(pr, q.x - w / 2, q.y - h, w, h);
+    }
+    // clouds
+    for (const cl of G.clouds) { const q = project(cl.x, cl.y, cl.z); if (!q) continue; const w = 96 * q.s * 6; if (w > 2 && w < 1200) { c.globalAlpha = Math.min(1, cl.z / 800); c.drawImage(CLOUD, q.x - w / 2, q.y - w * 0.18, w, w * 0.375); c.globalAlpha = 1; } }
+    // enemies, far to near
+    const ents = G.enemies.slice().sort((p, q) => q.z - p.z);
+    for (const e of ents) {
+      const q = project(e.x, e.y, e.z); if (!q) continue;
+      if (e.dead) continue;
+      const img = e.bomber ? BOMBER : e.rear && e.vz > 0 ? ENEMY_REAR : ENEMY;
+      const w = img.width * q.s * (e.bomber ? 4 : 3), h = w * img.height / img.width;
+      c.save(); c.translate(q.x, q.y); c.rotate(-e.vx / 1200);
+      c.drawImage(img, -w / 2, -h / 2, w, h); c.restore();
+      if (G.lock.includes(e)) { c.strokeStyle = '#f33'; c.lineWidth = 1.5; const r = Math.max(6, w * 0.6); c.strokeRect(q.x - r, q.y - r, r * 2, r * 2); c.beginPath(); c.moveTo(q.x - r - 3, q.y); c.lineTo(q.x + r + 3, q.y); c.stroke(); }
+    }
+    // missiles in flight
+    for (const m of G.missiles) { const q = project(m.x, m.y, m.z); if (!q) continue; c.fillStyle = '#fff'; c.fillRect(q.x - 1.5, q.y - 1.5, 3, 3); c.fillStyle = 'rgba(255,255,255,.35)'; c.beginPath(); c.arc(q.x, q.y + 3, 3, 0, 7); c.fill(); }
+    for (const s of G.eShots) {
+      const q = project(s.x, s.y, s.z); if (!q) continue;
+      const r = Math.max(1.5, 14 * q.s * 3);
+      c.fillStyle = '#ff5a1a'; c.beginPath(); c.arc(q.x, q.y, r, 0, 7); c.fill();
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(q.x, q.y, r * 0.5, 0, 7); c.fill();
+    }
+    for (const s of G.shots) { const q = project(s.x, s.y, s.z); if (!q) continue; c.fillStyle = '#ffe04a'; c.fillRect(q.x - 1, q.y - 1, 2, 3); }
+    for (const b of G.booms) {
+      let x, y, s;
+      if (b.screen) { x = b.sx; y = b.sy; s = 1; } else { const q = project(b.x, b.y, Math.max(50, b.z)); if (!q) continue; x = q.x; y = q.y; s = q.s * 6; }
+      const r = (b.big ? 60 : 30) * s * (0.3 + b.t);
+      c.globalAlpha = Math.max(0, 1 - b.t);
+      c.fillStyle = '#ff8a1a'; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill();
+      c.fillStyle = '#ffe04a'; c.beginPath(); c.arc(x, y, r * 0.55, 0, 7); c.fill();
+      c.globalAlpha = 1;
+    }
+    c.restore();
+  }
+  function mixc(a, b, t) {
+    const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    const A1 = p(a), B1 = p(b);
+    return 'rgb(' + A1.map((v, i) => Math.round(v + (B1[i] - v) * t)).join(',') + ')';
+  }
+
+  function c_draw_player(c) {
+    if (G.dead > 0 && G.dead < 2.2) return;
+    if (G.inv > 0 && Math.floor(G.t * 12) % 2) return;
+    const x = W / 2 + (G.vx / 1400) * 20, y = H - 44 - (G.vy / 700) * 8;
+    c.save(); c.translate(x, y); c.rotate(G.bank * 1.2 + (G.roll || 0));
+    const w = 88, h = w * 30 / 64;
+    // afterburners
+    const fl = 6 + Math.random() * 5;
+    c.fillStyle = '#ff8a1a'; c.beginPath(); c.moveTo(-6, h / 2 - 8); c.lineTo(-3, h / 2 - 8 + fl); c.lineTo(0, h / 2 - 8); c.fill();
+    c.beginPath(); c.moveTo(1, h / 2 - 8); c.lineTo(4, h / 2 - 8 + fl); c.lineTo(7, h / 2 - 8); c.fill();
+    c.drawImage(PLAYER, -w / 2, -h / 2, w, h);
+    c.restore();
+  }
+
+  function drawHud(a) {
+    const c = a.ctx;
+    if (!G.st) return;
+    // reticle
+    const ry = G.hy - 6;
+    c.strokeStyle = G.lock.length ? '#f33' : 'rgba(120,255,160,.85)'; c.lineWidth = 1;
+    c.beginPath(); c.arc(W / 2, ry, 12, 0, 7); c.moveTo(W / 2 - 18, ry); c.lineTo(W / 2 - 8, ry); c.moveTo(W / 2 + 8, ry); c.lineTo(W / 2 + 18, ry); c.moveTo(W / 2, ry - 18); c.lineTo(W / 2, ry - 8); c.stroke();
+    a.text('SCORE', 6, 4, 8, '#7cf'); a.text(String(a.score), 6, 14, 8, '#fff');
+    a.text('HI ' + a.hi, W / 2, 4, 8, '#f80', 'center');
+    a.text('STAGE ' + (G.stage + 1), W - 6, 4, 8, '#7cf', 'right');
+    a.text('HIT ' + (G.kills || 0), W - 6, 14, 8, '#fff', 'right');
+    a.text('MSL ' + (G.missilesLeft || 0), 6, H - 12, 8, '#ffd21e');
+    for (let k = 0; k < Math.max(0, (G.lives || 0) - 1); k++) c.drawImage(PLAYER, W - 26 - k * 22, H - 14, 20, 9);
+    if (G.lock && G.lock.length && Math.floor(G.t * 6) % 2) a.text('LOCK ' + G.lock.length, W / 2, ry + 20, 8, '#f33', 'center');
+    if (G.incoming && Math.floor(G.t * 4) % 2) a.text('MISSILE ALERT', W / 2, 30, 8, '#f33', 'center');
+    if (G.banner > 0) { a.text('STAGE ' + (G.stage + 1), W / 2, 60, 16, '#fff', 'center'); a.text(G.st.name, W / 2, 84, 8, '#ffd21e', 'center'); }
+    if (G.clear > 0) { a.text('STAGE CLEAR', W / 2, 70, 14, '#ffd21e', 'center'); a.text('BONUS ' + (G.kills * 200), W / 2, 92, 8, '#fff', 'center'); }
+    if (G.dead > 0 && G.lives > 0 && G.dead < 1.6) a.text('GET READY', W / 2, 90, 10, '#fff', 'center');
+  }
+
+  window.__g = () => G;
+})();
+</script>
+</body>
+</html>

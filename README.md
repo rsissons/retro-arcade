@@ -1,6 +1,6 @@
 # Retro Arcade
 
-Fourteen 80s arcade classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
+Eighteen 80s arcade classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
 
 | Game | Tribute to |
 |---|---|
@@ -18,6 +18,10 @@ Fourteen 80s arcade classics that play in the browser. It's a static site with n
 | Lean Machine | Hang-On (1985): lean into bends, tuck for top speed, five checkpoints |
 | Girder Climb | Donkey Kong (1981): barrels, cement factory, elevators, rivets |
 | Knight's Gauntlet | Dragon's Lair (1983): eight rooms of one-wrong-move-and-you're-dead, mirrored on the second quest |
+| Miss Muncher | Ms. Pac-Man (1982): four mazes, fruit that bounces in through the tunnels |
+| Pin Seeker | Golden Tee (1989): nine generated holes, swipe-to-swing, wind, water and trees |
+| Sky Fury | After Burner (1987): banking horizon, lock-on missiles, barrel rolls |
+| City Stomper | Rampage (1986): climb, punch and flatten every building in town |
 
 Every game except Zork is an original rebuild. None of them uses the original code, ROMs or artwork, and each one has its own name, since the original titles are still trademarks. Zork I is Infocom's original story file, released under the MIT license by Microsoft in 2025 ([historicalsource/zork1](https://github.com/historicalsource/zork1)).
 

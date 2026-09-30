@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Retro Arcade</title>
-<meta name="description" content="Fourteen classic 80s arcade games, rebuilt to play free in your browser.">
+<meta name="description" content="Eighteen classic 80s arcade games, rebuilt to play free in your browser.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
 <style>
@@ -64,14 +64,14 @@
 <body>
 <header>
   <h1>RETRO ARCADE</h1>
-  <p class="tag">Fourteen 80s classics. No quarters required.</p>
+  <p class="tag">Eighteen 80s classics. No quarters required.</p>
   <div class="coin">INSERT COIN</div>
 </header>
 <main>
   <div class="grid" id="grid"></div>
   <div class="help">
     <b>Keyboard:</b> arrow keys to move, Space to fire, P to pause, M for sound, Enter to start.<br>
-    <b>iPad and phones:</b> on-screen buttons show up automatically. City Shield is tap to fire. The two racers also have tilt steering (tap TILT at the top).<br>
+    <b>iPad and phones:</b> on-screen buttons show up automatically. City Shield is tap to fire. In Pin Seeker, swipe down then up to swing. The two racers also have tilt steering (tap TILT at the top).<br>
     <b>Save to home screen:</b> in Safari tap Share, then Add to Home Screen.<br>
     High scores are kept on each device.
   </div>
@@ -97,6 +97,10 @@
     { id: 'leaner', name: 'LEAN MACHINE', orig: 'Hang-On, 1985', c: '#ff3b3b' },
     { id: 'girder', name: 'GIRDER CLIMB', orig: 'Donkey Kong, 1981', c: '#e0205a' },
     { id: 'knight', name: "KNIGHT'S GAUNTLET", orig: "Dragon's Lair, 1983", c: '#ffd21e' },
+    { id: 'missmuncher', name: 'MISS MUNCHER', orig: 'Ms. Pac-Man, 1982', c: '#ff5cb8' },
+    { id: 'pinseeker', name: 'PIN SEEKER', orig: 'Golden Tee, 1989', c: '#7fdc6a' },
+    { id: 'skyfury', name: 'SKY FURY', orig: 'After Burner, 1987', c: '#7cf' },
+    { id: 'stomper', name: 'CITY STOMPER', orig: 'Rampage, 1986', c: '#3fa04a' },
   ];
   const grid = document.getElementById('grid');
   const hi = id => { try { return parseInt(localStorage.getItem('arcade.hi.' + id) || '0', 10) || 0; } catch (e) { return 0; } };
