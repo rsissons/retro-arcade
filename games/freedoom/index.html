@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Freedoom</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/wasmpad.js"></script>
+<script>
+  WasmPad.start({
+    title: 'FREEDOOM', color: '#e0301f',
+    subtitle: 'THE REAL DOOM ENGINE (CHOCOLATE DOOM, GPL)<br>WITH FREEDOOM, THE FREE REPLACEMENT GAME DATA',
+    engine: '../../engine/doom',
+    data: [{ url: 'freedoom1.wad', name: 'freedoom1.wad', size: 28795076 }],
+    files: {
+      'default.cfg': 'joyb_speed 29\nshow_messages 1\nscreenblocks 10\ndetaillevel 0\nsnd_musicdevice 3\nsnd_sfxdevice 3\nsfx_volume 10\nmusic_volume 8\nusemouse 0\nusegamma 0\n',
+      'chocolate-doom.cfg': 'fullscreen 0\nwindow_width 640\nwindow_height 480\naspect_ratio_correct 1\nkey_nextweapon 18\nkey_prevweapon 16\nnovert 1\nopl_io_port 0x388\nsnd_samplerate 44100\n',
+    },
+    args: ['-skill', '3', '-warp', '1', '1', '-iwad', 'freedoom1.wad', '-window', '-nogui', '-config', 'default.cfg', '-extraconfig', 'chocolate-doom.cfg'],
+  });
+</script>
+</body>
+</html>

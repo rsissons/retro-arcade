@@ -1,6 +1,6 @@
 # Retro Arcade
 
-Twenty-one arcade and PC classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
+Twenty-three arcade and PC classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
 
 | Game | Tribute to |
 |---|---|
@@ -25,6 +25,8 @@ Twenty-one arcade and PC classics that play in the browser. It's a static site w
 | Castle Escape | Wolfenstein 3D (1992): three floors, keys, secret push walls, a boss |
 | Max Havoc | Duke Nukem 3D (1996): keycards, shotgun, ripper, rockets, exploding barrels |
 | Vector Strike | Star Wars (1983): vector dogfight, hull run and trench dive |
+| **Freedoom** | **The real Doom engine** (Chocolate Doom, GPL, compiled to WebAssembly) with Freedoom's free game data |
+| **Blasphemer** | **The real Heretic engine** (Chocolate Heretic, GPL) with Blasphemer's free game data (unfinished fan project, episodes 1-3) |
 
 Every game except Zork is an original rebuild. None of them uses the original code, ROMs or artwork, and each one has its own name, since the original titles are still trademarks. Zork I is Infocom's original story file, released under the MIT license by Microsoft in 2025 ([historicalsource/zork1](https://github.com/historicalsource/zork1)).
 
@@ -38,7 +40,12 @@ Every game except Zork is an original rebuild. None of them uses the original co
 - `shared/raycast.js` and `fps.js`: the grid raycaster and the first-person shooter kit (doors, enemies, weapons, pickups) used by Castle Escape and Max Havoc.
 - `assets/audio/` and `assets/sfx/`: music (AAC) and effects (WAV).
 
+- `engine/`: Chocolate Doom and Chocolate Heretic compiled to WebAssembly, GPL v2 (`engine/COPYING-GPL.md`). Source: https://github.com/chocolate-doom/chocolate-doom, built with Emscripten with two small browser patches (the OPL music timer and a per-frame yield in the main loop).
+- `shared/wasmpad.js`: loader, tap-to-start and on-screen touch controls for the compiled engines.
+
 ## Credits
+- Freedoom (BSD): https://freedoom.github.io, license in `games/freedoom/FREEDOOM-COPYING.txt`.
+- Blasphemer (BSD): https://github.com/Blasphemer/blasphemer, license in `games/blasphemer/BLASPHEMER-COPYING.md`.
 All music and sound effects are public domain (CC0), from OpenGameArt:
 - Juhani Junkala (SubspaceAudio): 5 Action Chiptunes, Chiptune Adventures, JRPG Pack 5, and the 512 Sound Effects pack.
 - Alex McCulloch (Pro Sensory): Space Synth Wave.
