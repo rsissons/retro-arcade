@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vector Strike</title>
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../shared/arcade.css">
+</head>
+<body>
+<script src="../../shared/arcade.js"></script>
+<script src="../../shared/audio.js"></script>
+<script>
+(function () {
+  const W = 320, H = 240, F = 220;
+  const AU = Arcade.Audio;
+  const S = '../../assets/sfx/';
+  AU.load({ music: '../../assets/audio/radio-synthwave.m4a', laser: S + 'laser.wav', boom: S + 'boom.wav', bigboom: S + 'bigboom.wav', hit: S + 'hit.wav', alarm: S + 'alarm.wav', fanfare: S + 'fanfare.wav', powerup: S + 'powerup.wav', whoosh: S + 'whoosh.wav' });
+
+  // ---------- wireframe models (x right, y up, z forward) ----------
+  const FIGHTER = { v: [[0, 0, 14], [-16, 0, -8], [16, 0, -8], [0, 5, -6], [0, -5, -6], [-6, 0, -12], [6, 0, -12]], e: [[0, 1], [0, 2], [1, 5], [2, 6], [5, 6], [0, 3], [0, 4], [3, 5], [3, 6], [4, 5], [4, 6], [1, 3], [2, 3]] };
+  function box(w, h, d, y0) { const v = []; for (const x of [-w, w]) for (const y of [y0, y0 + h]) for (const z of [-d, d]) v.push([x, y, z]); return { v, e: [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]] }; }
+  const TOWER = box(8, 60, 8, 0), TOWERTOP = box(5, 6, 5, 60), BUNKER = box(14, 8, 10, 0);
+
+  let G, A;
+  const cross = { x: W / 2, y: H / 2 };
+
+  function project(x, y, z) {
+    const cz = z - G.cam.z;
+    if (cz < 4) return null;
+    return [W / 2 + (x - G.cam.x) * F / cz, H / 2 - (y - G.cam.y) * F / cz, F / cz];
+  }
+  function line(c, a, b) { if (!a || !b) return; c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); }
+  function drawModel(c, m, x, y, z, rot, col, scale) {
+    const cs = Math.cos(rot || 0), sn = Math.sin(rot || 0), s = scale || 1;
+    const P = m.v.map(([vx, vy, vz]) => project(x + (vx * cs - vz * sn) * s, y + vy * s, z + (vx * sn + vz * cs) * s));
+    c.strokeStyle = col; c.beginPath();
+    for (const [i, j] of m.e) line(c, P[i], P[j]);
+    c.stroke();
+    return P[0];
+  }
+
+  // ---------- phases ----------
+  function startPhase(name) {
+    G.phase = name; G.pt = 0; G.enemies = []; G.fire = []; G.things = []; G.banner = 2;
+    G.cam = { x: 0, y: name === 'space' ? 0 : name === 'surface' ? 40 : 30, z: 0 };
+    if (name === 'space') G.left = 8 + G.wave * 2;
+    if (name === 'surface') G.surfT = 22;
+    if (name === 'trench') { G.trenchLen = 3200 + G.wave * 400; G.speed = 260 + G.wave * 30; G.cat = []; for (let z = 500; z < G.trenchLen - 300; z += 260 - Math.min(120, G.wave * 20)) G.cat.push({ z, y: 12 + Math.random() * 40, h: 8 }); G.turrets = []; for (let z = 400; z < G.trenchLen - 300; z += 180) G.turrets.push({ z, side: Math.random() < 0.5 ? -1 : 1, y: 10 + Math.random() * 40, fireT: 0 }); G.port = { z: G.trenchLen }; }
+  }
+
+  function hitShield(a) {
+    if (G.inv > 0) return;
+    G.shields--; G.inv = 0.8; G.shake = 0.4;
+    AU.play('hit', { v: 0.8 });
+    if (G.shields <= 1) AU.play('alarm', { v: 0.3 });
+    if (G.shields <= 0) { AU.play('bigboom', { v: 0.8 }); G.phase = 'dead'; G.pt = 0; }
+  }
+
+  function shoot(a) {
+    G.laser = 0.12; G.lastShot = { x: cross.x, y: cross.y };
+    AU.play('laser', { v: 0.4 });
+    // hitscan against whatever sits under the crosshair
+    const near = (sx, sy, r) => Math.hypot(sx - cross.x, sy - cross.y) < r;
+    for (const f of G.fire) { const p = project(f.x, f.y, f.z); if (p && near(p[0], p[1], Math.max(8, 6 * p[2]))) { f.dead = true; a.addScore(33); boom(f.x, f.y, f.z, 0.5); } }
+    for (const e of G.enemies) { const p = project(e.x, e.y, e.z); if (p && !e.dead && near(p[0], p[1], Math.max(8, 16 * p[2]))) { e.dead = true; a.addScore(1000); boom(e.x, e.y, e.z, 1); AU.play('boom', { v: 0.6 }); G.left--; } }
+    for (const t of G.things) {
+      if (t.dead) continue;
+      const top = t.kind === 'tower' ? project(t.x, 63, t.z) : project(t.x, 4, t.z);
+      if (top && near(top[0], top[1], Math.max(6, 8 * top[2]))) { t.dead = true; a.addScore(t.kind === 'tower' ? 200 : 100); boom(t.x, t.kind === 'tower' ? 63 : 4, t.z, 0.7); AU.play('boom', { v: 0.5 }); }
+    }
+    if (G.phase === 'trench') {
+      for (const t of G.turrets) { if (t.dead) continue; const p = project(t.side * 40, t.y, t.z); if (p && near(p[0], p[1], Math.max(6, 8 * p[2]))) { t.dead = true; a.addScore(100); boom(t.side * 40, t.y, t.z, 0.6); } }
+      const pz = G.port.z - G.cam.z;
+      if (pz > 20 && pz < 140) { const p = project(0, 0, G.port.z); if (p && near(p[0], p[1], 26)) { G.portHit = true; } }
+    }
+  }
+  function boom(x, y, z, s) { G.booms.push({ x, y, z, s, t: 0 }); }
+
+  A = Arcade.start({
+    id: 'vector', title: 'VECTOR STRIKE', subtitle: 'A TRIBUTE TO STAR WARS (1983)', color: '#ffd21e',
+    width: W, height: H, bg: '#000',
+    help: ['ARROWS OR MOUSE AIM', 'SPACE FIRES THE LASERS', 'SHOOT FIGHTERS AND FIREBALLS', 'DIVE THE TRENCH, DODGE THE CATWALKS', 'HIT THE VENT AT THE END'],
+    touch: { dpad: '4', buttons: [{ act: 'fire', label: 'FIRE' }] },
+    onPointerMove(x, y) { cross.x = Math.max(10, Math.min(W - 10, x)); cross.y = Math.max(20, Math.min(H - 20, y)); },
+    onPointer(x, y, a) { cross.x = x; cross.y = y; shoot(a); },
+    init() { G = { wave: 1, t: 0, cam: { x: 0, y: 0, z: 0 }, stars: [], booms: [], fire: [], enemies: [], things: [] }; for (let i = 0; i < 120; i++) G.stars.push([(Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 1400, Math.random() * 2000]); G.phase = 'space'; },
+    attract(a, dt) { G.t += dt; for (const s of G.stars) { s[2] -= 300 * dt; if (s[2] < 5) s[2] += 2000; } },
+    drawAttract(a) { drawStars(a.ctx); },
+    newGame(a) {
+      G = { wave: 1, t: 0, shields: 6, inv: 0, shake: 0, cam: { x: 0, y: 0, z: 0 }, stars: [], booms: [], laser: 0, fireT: 0 };
+      for (let i = 0; i < 120; i++) G.stars.push([(Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 1400, Math.random() * 2000]);
+      cross.x = W / 2; cross.y = H / 2;
+      startPhase('space');
+      AU.music('music', { v: 0.45 });
+    },
+    update(a, dt) {
+      G.t += dt; G.pt += dt;
+      if (G.banner > 0) G.banner -= dt;
+      if (G.inv > 0) G.inv -= dt; if (G.shake > 0) G.shake -= dt; if (G.laser > 0) G.laser -= dt;
+      const ax = (a.down('right') ? 1 : 0) - (a.down('left') ? 1 : 0), ay = (a.down('down') ? 1 : 0) - (a.down('up') ? 1 : 0);
+      cross.x = Math.max(10, Math.min(W - 10, cross.x + ax * 170 * dt));
+      cross.y = Math.max(20, Math.min(H - 20, cross.y + ay * 150 * dt));
+      G.fireT -= dt;
+      if (a.down('fire') && G.fireT <= 0 && G.phase !== 'dead' && G.phase !== 'victory') { G.fireT = 0.18; shoot(a); }
+      for (let k = G.booms.length - 1; k >= 0; k--) { G.booms[k].t += dt; if (G.booms[k].t > 0.8) G.booms.splice(k, 1); }
+      // the ship steers toward where the crosshair is
+      const steerX = (cross.x - W / 2) / (W / 2), steerY = -(cross.y - H / 2) / (H / 2);
+      if (G.phase === 'space') {
+        for (const s of G.stars) { s[0] -= steerX * 200 * dt; s[1] -= steerY * 150 * dt; s[2] -= 260 * dt; if (s[2] < 5) s[2] += 2000; }
+        if (G.enemies.length < Math.min(3, G.left) && Math.random() < dt * 1.2) G.enemies.push({ x: (Math.random() - 0.5) * 400, y: (Math.random() - 0.5) * 200, z: 900, vx: (Math.random() - 0.5) * 120, vy: (Math.random() - 0.5) * 80, fireT: 1 + Math.random(), rot: 0, t: 0 });
+        for (const e of G.enemies) {
+          e.t += dt; e.x += (e.vx - steerX * 160) * dt; e.y += (e.vy - steerY * 120) * dt; e.z += Math.sin(e.t * 0.8) * 120 * dt - 30 * dt; e.rot = Math.sin(e.t * 2) * 0.6;
+          if (Math.abs(e.x) > 350) e.vx = -Math.sign(e.x) * Math.abs(e.vx); if (Math.abs(e.y) > 200) e.vy = -Math.sign(e.y) * Math.abs(e.vy);
+          e.fireT -= dt * (1 + G.wave * 0.15);
+          if (e.fireT <= 0 && e.z > 200) { e.fireT = 1.8 + Math.random() * 1.5; G.fire.push({ x: e.x, y: e.y, z: e.z, vx: -e.x / (e.z / 300), vy: -e.y / (e.z / 300), vz: -300 - G.wave * 30 }); }
+          if (e.z < 60) { e.dead = true; }
+        }
+        G.enemies = G.enemies.filter(e => !e.dead);
+        if (G.left <= 0 && !G.enemies.length) startPhase('surface');
+      } else if (G.phase === 'surface') {
+        G.cam.z += 300 * dt;
+        G.cam.x += steerX * 140 * dt; G.cam.y = Math.max(14, Math.min(90, G.cam.y + steerY * 80 * dt));
+        if (Math.random() < dt * (2 + G.wave * 0.3)) G.things.push({ kind: Math.random() < 0.6 ? 'tower' : 'bunker', x: G.cam.x + (Math.random() - 0.5) * 360, z: G.cam.z + 900, fireT: Math.random() * 2 });
+        for (const t of G.things) {
+          if (t.dead) continue;
+          t.fireT -= dt;
+          if (t.fireT <= 0 && t.z - G.cam.z > 250) { t.fireT = 2.5 - Math.min(1.2, G.wave * 0.2); const y = t.kind === 'tower' ? 63 : 8; G.fire.push({ x: t.x, y, z: t.z, vx: (G.cam.x - t.x) * 0.6, vy: (G.cam.y - y) * 0.6, vz: -220 }); }
+          // flying into a tower
+          if (t.kind === 'tower' && Math.abs(t.z - G.cam.z) < 10 && Math.abs(t.x - G.cam.x) < 10 && G.cam.y < 62) { t.dead = true; hitShield(a); }
+        }
+        G.things = G.things.filter(t => t.z > G.cam.z - 20);
+        G.surfT -= dt;
+        if (G.surfT <= 0) { startPhase('trench'); AU.play('whoosh', { v: 0.6 }); }
+      } else if (G.phase === 'trench') {
+        G.cam.z += G.speed * dt;
+        G.cam.x = Math.max(-30, Math.min(30, G.cam.x + steerX * 60 * dt));
+        G.cam.y = Math.max(6, Math.min(58, G.cam.y + steerY * 60 * dt));
+        for (const cw of G.cat) {
+          if (cw.hit) continue;
+          if (Math.abs(cw.z - G.cam.z) < 8 && Math.abs(G.cam.y - (cw.y + cw.h / 2)) < cw.h / 2 + 3) { cw.hit = true; hitShield(a); }
+        }
+        for (const t of G.turrets) {
+          if (t.dead) continue;
+          t.fireT -= dt;
+          const dz = t.z - G.cam.z;
+          if (t.fireT <= 0 && dz > 150 && dz < 700) { t.fireT = 1.6; G.fire.push({ x: t.side * 38, y: t.y, z: t.z, vx: (G.cam.x - t.side * 38) * 0.5, vy: (G.cam.y - t.y) * 0.5, vz: -260 - G.speed * 0.3 }); }
+        }
+        if (G.portHit) { G.phase = 'victory'; G.pt = 0; a.addScore(25000 + G.shields * 5000); AU.play('bigboom', { v: 0.9 }); AU.play('fanfare', { v: 0.8, delay: 1.2 }); }
+        else if (G.cam.z > G.port.z + 40) { G.banner = 2; G.missed = 2; startPhase('trench'); }
+      } else if (G.phase === 'victory') {
+        if (G.pt > 4.5) { G.wave++; G.shields = Math.min(6, G.shields + 1); startPhase('space'); }
+      } else if (G.phase === 'dead') {
+        if (G.pt > 2.5) a.gameOver();
+      }
+      // enemy fireballs
+      for (const f of G.fire) {
+        f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
+        if (G.phase === 'space') { f.x -= steerX * 160 * dt; f.y -= steerY * 120 * dt; }
+        if (f.z - G.cam.z < 12 && !f.dead) { f.dead = true; if (Math.hypot(f.x - G.cam.x, f.y - G.cam.y) < 40) hitShield(a); }
+      }
+      G.fire = (G.fire || []).filter(f => !f.dead);
+      if (G.missed > 0) G.missed -= dt;
+    },
+    draw(a) {
+      const c = a.ctx;
+      c.save();
+      if (G.shake > 0) c.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+      c.lineWidth = 1; c.shadowBlur = 6; c.lineCap = 'round';
+      if (G.phase === 'space' || G.phase === 'dead' && G.enemies) drawStars(c);
+      if (G.phase === 'space') for (const e of G.enemies) { c.shadowColor = '#f44'; drawModel(c, FIGHTER, e.x, e.y, e.z, e.rot, '#ff5a5a', 1.3); }
+      if (G.phase === 'surface') drawSurface(c);
+      if (G.phase === 'trench' || G.phase === 'victory') drawTrench(c);
+      for (const f of G.fire) { const p = project(f.x, f.y, f.z); if (!p) continue; const r = Math.max(2, 5 * p[2]); c.shadowColor = '#fa0'; c.strokeStyle = '#ffb02a'; c.beginPath(); for (let k = 0; k < 8; k++) { const ang = k / 8 * Math.PI * 2 + G.t * 6; c.moveTo(p[0], p[1]); c.lineTo(p[0] + Math.cos(ang) * r, p[1] + Math.sin(ang) * r); } c.stroke(); }
+      for (const b of G.booms) { const p = project(b.x, b.y, b.z); if (!p) continue; const r = (8 + b.t * 60) * Math.max(0.3, p[2]) * b.s; c.shadowColor = '#fff'; c.strokeStyle = `rgba(255,${200 - b.t * 200},80,${1 - b.t})`; c.beginPath(); for (let k = 0; k < 10; k++) { const ang = k * 0.63; c.moveTo(p[0] + Math.cos(ang) * r * 0.3, p[1] + Math.sin(ang) * r * 0.3); c.lineTo(p[0] + Math.cos(ang) * r, p[1] + Math.sin(ang) * r); } c.stroke(); }
+      // lasers from the four wing guns
+      if (G.laser > 0 && G.lastShot) { c.shadowColor = '#f00'; c.strokeStyle = '#ff4040'; c.lineWidth = 2; c.beginPath(); for (const [gx, gy] of [[0, 0], [W, 0], [0, H], [W, H]]) { c.moveTo(gx, gy); c.lineTo(G.lastShot.x, G.lastShot.y); } c.stroke(); c.lineWidth = 1; }
+      if (G.phase === 'victory') { const k = G.pt; c.shadowColor = '#fff'; c.strokeStyle = `rgba(255,255,200,${Math.max(0, 1 - k / 3)})`; c.beginPath(); for (let i = 0; i < 40; i++) { const ang = i * 0.157; c.moveTo(W / 2, H / 2); c.lineTo(W / 2 + Math.cos(ang) * k * 200, H / 2 + Math.sin(ang) * k * 200); } c.stroke(); }
+      c.shadowBlur = 0;
+      // crosshair
+      c.strokeStyle = '#ffd21e'; c.beginPath(); c.moveTo(cross.x - 12, cross.y); c.lineTo(cross.x - 4, cross.y); c.moveTo(cross.x + 4, cross.y); c.lineTo(cross.x + 12, cross.y); c.moveTo(cross.x, cross.y - 12); c.lineTo(cross.x, cross.y - 4); c.moveTo(cross.x, cross.y + 4); c.lineTo(cross.x, cross.y + 12); c.stroke();
+      c.restore();
+      // HUD
+      a.text('SCORE ' + a.score, 6, 4, 8, '#ffd21e');
+      a.text('WAVE ' + G.wave, W - 6, 4, 8, '#ffd21e', 'right');
+      a.text('SHIELDS', 6, H - 12, 6, '#7cf');
+      for (let k = 0; k < 6; k++) { c.strokeStyle = k < G.shields ? (G.shields <= 2 ? '#f44' : '#7cf') : '#234'; c.strokeRect(60 + k * 10, H - 13, 7, 8); if (k < G.shields) { c.fillStyle = c.strokeStyle; c.fillRect(62 + k * 10, H - 11, 3, 4); } }
+      const labels = { space: 'ATTACK THE FIGHTERS', surface: 'RUN THE HULL - SHOOT THE TOWER TOPS', trench: 'DIVE THE TRENCH', victory: 'DREADNOUGHT DESTROYED!', dead: 'SHIELDS GONE' };
+      if (G.banner > 0 || G.phase === 'victory' || G.phase === 'dead') a.text(labels[G.phase] || '', W / 2, 40, 8, G.phase === 'dead' ? '#f44' : '#7cf', 'center');
+      if (G.missed > 0) a.text('YOU MISSED - GO AGAIN', W / 2, 56, 8, '#f44', 'center');
+      if (G.phase === 'space') a.text('FIGHTERS ' + Math.max(0, G.left), W - 6, H - 12, 6, '#f88', 'right');
+      if (G.phase === 'trench') { const d = Math.max(0, Math.round((G.port.z - G.cam.z) / 10)); a.text('VENT ' + d, W - 6, H - 12, 6, d < 20 ? '#f44' : '#7cf', 'right'); }
+    },
+  });
+
+  function drawStars(c) {
+    c.fillStyle = '#fff';
+    for (const s of G.stars) { const z = s[2]; if (z < 5) continue; const x = W / 2 + s[0] * F / z / 3, y = H / 2 + s[1] * F / z / 3; if (x < 0 || x > W || y < 0 || y > H) continue; const r = Math.max(0.6, 2 - z / 1000); c.fillRect(x, y, r, r); }
+  }
+  function drawSurface(c) {
+    // hull grid
+    c.shadowColor = '#3f6'; c.strokeStyle = '#2fbf5a'; c.beginPath();
+    const z0 = Math.floor(G.cam.z / 60) * 60;
+    for (let z = z0 + 60; z < G.cam.z + 900; z += 60) { const a2 = project(G.cam.x - 600, 0, z), b = project(G.cam.x + 600, 0, z); line(c, a2, b); }
+    for (let x = Math.floor((G.cam.x - 600) / 60) * 60; x < G.cam.x + 600; x += 60) { const a2 = project(x, 0, G.cam.z + 10), b = project(x, 0, G.cam.z + 900); line(c, a2, b); }
+    c.stroke();
+    const list = G.things.slice().sort((p, q) => q.z - p.z);
+    for (const t of list) {
+      if (t.dead) continue;
+      if (t.kind === 'tower') { drawModel(c, TOWER, t.x, 0, t.z, 0, '#2fbf5a'); c.shadowColor = '#f44'; drawModel(c, TOWERTOP, t.x, 0, t.z, 0, '#ff5a5a'); c.shadowColor = '#3f6'; }
+      else drawModel(c, BUNKER, t.x, 0, t.z, 0, '#2fbf5a');
+    }
+  }
+  function drawTrench(c) {
+    c.shadowColor = '#3f6'; c.strokeStyle = '#2fbf5a'; c.beginPath();
+    const wx = 40, top = 66;
+    const z0 = Math.floor(G.cam.z / 50) * 50;
+    for (let z = z0 + 50; z < G.cam.z + 800; z += 50) {
+      const p = [project(-wx, top, z), project(-wx, 0, z), project(wx, 0, z), project(wx, top, z)];
+      line(c, p[0], p[1]); line(c, p[1], p[2]); line(c, p[2], p[3]);
+    }
+    for (const [x, y] of [[-wx, 0], [wx, 0], [-wx, top], [wx, top], [-wx, top / 2], [wx, top / 2]]) line(c, project(x, y, G.cam.z + 8), project(x, y, G.cam.z + 800));
+    c.stroke();
+    // catwalks
+    c.shadowColor = '#fd4'; c.strokeStyle = '#ffd21e'; c.beginPath();
+    for (const cw of G.cat) {
+      if (cw.z < G.cam.z || cw.z > G.cam.z + 800) continue;
+      const a2 = project(-wx, cw.y, cw.z), b = project(wx, cw.y, cw.z), a3 = project(-wx, cw.y + cw.h, cw.z), b3 = project(wx, cw.y + cw.h, cw.z);
+      line(c, a2, b); line(c, a3, b3); line(c, a2, a3); line(c, b, b3);
+    }
+    c.stroke();
+    c.shadowColor = '#f44'; c.strokeStyle = '#ff5a5a'; c.beginPath();
+    for (const t of G.turrets) { if (t.dead || t.z < G.cam.z || t.z > G.cam.z + 800) continue; const p = project(t.side * wx, t.y, t.z); if (!p) continue; const r = Math.max(2, 5 * p[2]); c.moveTo(p[0] + r, p[1]); c.arc(p[0], p[1], r, 0, 7); }
+    c.stroke();
+    // the vent
+    if (G.port.z - G.cam.z < 800) {
+      const p = project(0, 0, G.port.z);
+      if (p) { const r = Math.max(3, 14 * p[2]); c.shadowColor = '#fff'; c.strokeStyle = Math.floor(G.t * 8) % 2 ? '#fff' : '#ffd21e'; c.beginPath(); c.ellipse(p[0], p[1], r, r * 0.4, 0, 0, 7); c.moveTo(p[0] + r * 0.5, p[1]); c.ellipse(p[0], p[1], r * 0.5, r * 0.2, 0, 0, 7); c.stroke(); }
+    }
+  }
+
+  window.__g = () => G;
+  window.__cross = cross;
+  window.__proj = (x, y, z) => project(x, y, z);
+})();
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Retro Arcade
 
-Eighteen 80s arcade classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
+Twenty-one arcade and PC classics that play in the browser. It's a static site with no build step, no dependencies, and it works on desktop, iPad and phones.
 
 | Game | Tribute to |
 |---|---|
@@ -22,6 +22,9 @@ Eighteen 80s arcade classics that play in the browser. It's a static site with n
 | Pin Seeker | Golden Tee (1989): nine generated holes, swipe-to-swing, wind, water and trees |
 | Sky Fury | After Burner (1987): banking horizon, lock-on missiles, barrel rolls |
 | City Stomper | Rampage (1986): climb, punch and flatten every building in town |
+| Castle Escape | Wolfenstein 3D (1992): three floors, keys, secret push walls, a boss |
+| Max Havoc | Duke Nukem 3D (1996): keycards, shotgun, ripper, rockets, exploding barrels |
+| Vector Strike | Star Wars (1983): vector dogfight, hull run and trench dive |
 
 Every game except Zork is an original rebuild. None of them uses the original code, ROMs or artwork, and each one has its own name, since the original titles are still trademarks. Zork I is Infocom's original story file, released under the MIT license by Microsoft in 2025 ([historicalsource/zork1](https://github.com/historicalsource/zork1)).
 
@@ -32,6 +35,7 @@ Every game except Zork is an original rebuild. None of them uses the original co
 - `games/zork/zmachine.js`: the Z-machine version 3 interpreter. Zork's page autosaves after every move.
 - `shared/audio.js`: sampled music and sound effects on top of the engine's audio, paused with the game.
 - `shared/road3d.js` and `roadart.js`: the pseudo-3D road engine and its scenery, used by the two racers.
+- `shared/raycast.js` and `fps.js`: the grid raycaster and the first-person shooter kit (doors, enemies, weapons, pickups) used by Castle Escape and Max Havoc.
 - `assets/audio/` and `assets/sfx/`: music (AAC) and effects (WAV).
 
 ## Credits
